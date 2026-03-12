@@ -966,7 +966,10 @@ def _load_epub_entries(file_stream) -> list[dict]:
                 for el in soup(["script", "style"]):
                     el.decompose()
 
-                for tag in soup.find_all(["h1", "h2", "h3", "title"]):
+                # Search body headings only — <title> in <head> contains the
+                # book title (same for every chapter) and must be ignored.
+                body = soup.find("body") or soup
+                for tag in body.find_all(["h1", "h2", "h3"]):
                     candidate = tag.get_text(" ", strip=True)
                     if candidate:
                         title = candidate
@@ -2420,6 +2423,7 @@ def _api_epub_info(file_stream, filename: str):
         entries = _load_epub_entries(file_stream)
         return jsonify({
             "total_pages": len(entries),
+            "is_epub": True,
             "pages": [{"page": e["page"], "has_text": e["has_text"], "chars": e["chars"]} for e in entries],
             "chapters": [{"title": e["title"], "page": e["page"], "depth": 0} for e in entries],
         })

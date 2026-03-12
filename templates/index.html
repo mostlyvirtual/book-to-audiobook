@@ -1515,7 +1515,7 @@
 
   function renderPageInfo() {
     if (!cachedPageData) { pageInfoDiv.className = 'page-info'; return; }
-    const { total_pages, pages, chapters } = cachedPageData;
+    const { total_pages, pages, chapters, is_epub } = cachedPageData;
     const textPages  = pages.filter(p => p.has_text).length;
     const blankPages = total_pages - textPages;
 
@@ -1526,10 +1526,13 @@
       suggestion = `<span class="stat">Suggested: <a href="#" class="suggest-range" data-range="${firstText.page}-${lastText.page}">${firstText.page}&ndash;${lastText.page}</a></span>`;
     }
 
+    const unitLabel = is_epub ? 'chapters' : 'pages';
+    const textLabel = is_epub ? 'with content' : 'with text';
+    const blankLabel = is_epub ? 'image-only' : 'blank';
     let html = `<div class="stats">`;
-    html += `<span class="stat">${total_pages} pages</span>`;
-    html += `<span class="stat text-pages">${textPages} with text</span>`;
-    if (blankPages > 0) html += `<span class="stat blank-pages">${blankPages} blank</span>`;
+    html += `<span class="stat">${total_pages} ${unitLabel}</span>`;
+    html += `<span class="stat text-pages">${textPages} ${textLabel}</span>`;
+    if (blankPages > 0) html += `<span class="stat blank-pages">${blankPages} ${blankLabel}</span>`;
     html += suggestion;
     html += `</div>`;
 
