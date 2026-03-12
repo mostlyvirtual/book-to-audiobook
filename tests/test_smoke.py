@@ -421,3 +421,96 @@ class TestUtilityFunctions:
         assert app_module._slug_token("Hello World!") == "Hello-World"
         assert app_module._slug_token("") == "na"
         assert app_module._slug_token("a" * 100, max_len=10) == "a" * 10
+
+
+# ---------------------------------------------------------------------------
+# P0 — Debug mode must be off by default
+# ---------------------------------------------------------------------------
+
+class TestMainConfiguration:
+    def test_main_debug_off_by_default(self, monkeypatch):
+        """main() must call app.run(debug=False) when FLASK_DEBUG is unset."""
+        calls = []
+        monkeypatch.setattr(app_module.app, "run", lambda *a, **kw: calls.append(kw))
+        monkeypatch.delenv("FLASK_DEBUG", raising=False)
+        app_module.main()
+        assert calls, "app.run was never called"
+        assert calls[0].get("debug") is False, (
+            f"debug should be False by default, got {calls[0].get('debug')!r}"
+        )
+
+    def test_main_debug_on_when_env_set(self, monkeypatch):
+        """main() must call app.run(debug=True) when FLASK_DEBUG=1."""
+        calls = []
+        monkeypatch.setattr(app_module.app, "run", lambda *a, **kw: calls.append(kw))
+        monkeypatch.setenv("FLASK_DEBUG", "1")
+        app_module.main()
+        assert calls[0].get("debug") is True
+
+
+# ---------------------------------------------------------------------------
+# P1 — _expand_abbreviations must not fire on sentence-terminal "no."
+# ---------------------------------------------------------------------------
+
+class TestExpandAbbreviationsUnit:
+    def test_no_at_sentence_end_not_expanded(self):
+        """'no.' ending a sentence must NOT become 'number'."""
+        result = app_module._expand_abbreviations("She said no. He agreed.")
+        assert "number" not in result, (
+            f"'no.' expanded incorrectly: {result!r}"
+        )
+
+    def test_no_before_digit_is_expanded(self):
+        """'no. 5' (abbreviation for number) must still expand."""
+        result = app_module._expand_abbreviations("Exhibit no. 5 was admitted.")
+        assert "number" in result
+
+    def test_dr_title_still_expands(self):
+        """Standard title abbreviation 'Dr.' must still expand."""
+        result = app_module._expand_abbreviations("Dr. Smith arrived.")
+        assert "Doctor" in result
+
+    def test_etc_still_expands(self):
+        """'etc.' must still expand regardless of position."""
+        result = app_module._expand_abbreviations("Items, etc. follow.")
+        assert "et cetera" in result
+
+
+# ---------------------------------------------------------------------------
+# P2 — EPUB upload must be rejected if the file is not a valid ZIP
+# ---------------------------------------------------------------------------
+
+class TestFileUploadValidation:
+    def test_epub_without_zip_magic_rejected(self, client):
+        """An .epub file whose content is not a ZIP must be rejected with 400."""
+        resp = client.post(
+            "/convert",
+            data={
+                "backend": "kokoro",
+                "page_range": "all",
+                "pdf": (io.BytesIO(b"This is definitely not a zip file."), "fake.epub"),
+            },
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 400
+        error = resp.get_json()["error"]
+        assert "valid EPUB" in error, (
+            f"Expected 'valid EPUB' in error message, got: {error!r}"
+        )
+
+    def test_valid_epub_still_accepted(self, client, monkeypatch):
+        """A proper ZIP-based EPUB must not be rejected by the magic byte check."""
+        monkeypatch.setattr(app_module, "_do_synthesis", _fake_mp3_result)
+        epub_bytes = _make_epub_bytes([("Chapter One", "Body text here for testing.")])
+        resp = client.post(
+            "/convert",
+            data={
+                "backend": "kokoro",
+                "page_range": "all",
+                "pdf": (io.BytesIO(epub_bytes), "book.epub"),
+            },
+            content_type="multipart/form-data",
+        )
+        # May succeed (200) or fail for other reasons — must not be a 400 "valid EPUB" rejection
+        if resp.status_code == 400:
+            assert "valid EPUB" not in resp.get_json().get("error", "")

@@ -536,7 +536,7 @@ def _expand_abbreviations(text: str) -> str:
         r'\betc\.': 'et cetera',
         r'\bvs\.': 'versus',
         r'\bfig\.': 'figure',
-        r'\bno\.': 'number',
+        r'\bno\.(?=[ \t]+\d)': 'number',  # only expand before a digit: "no. 5"
         r'\bvol\.': 'volume',
         r'\bed\.': 'edition',
         r'\bpgs?\.': 'page',
@@ -2952,13 +2952,18 @@ def convert():
         if ext not in ALLOWED_EXTENSIONS:
             return _err(f"Invalid file type '{ext}'. Only PDF and EPUB files are accepted.")
         
-        # Check magic byte only for PDFs
+        # Validate file content via magic bytes before any parsing
         if ext == ".pdf":
             header = pdf_file.stream.read(4)
             pdf_file.stream.seek(0)
             if header[:4] != PDF_MAGIC:
                 return _err("The uploaded file does not appear to be a valid PDF.")
-        
+        elif ext == ".epub":
+            header = pdf_file.stream.read(4)
+            pdf_file.stream.seek(0)
+            if header[:4] != b"PK\x03\x04":  # ZIP local file header
+                return _err("The uploaded file does not appear to be a valid EPUB.")
+
         file_stream = pdf_file.stream
         source_filename = pdf_file.filename
     else:
@@ -3082,7 +3087,8 @@ def convert():
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    app.run(host="0.0.0.0", port=1234, debug=True)
+    debug = os.getenv("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")
+    app.run(host="0.0.0.0", port=1234, debug=debug)
 
 
 if __name__ == "__main__":
