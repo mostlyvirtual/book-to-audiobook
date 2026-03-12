@@ -1,5 +1,13 @@
 # Book to Audiobook Converter
 
+<div align="center">
+  <img src="docs/screenshot-source.jpeg" width="48%" alt="Source selection panel"/>
+  &nbsp;
+  <img src="docs/screenshot-engine-voice.jpeg" width="48%" alt="Engine and voice selection panel"/>
+</div>
+
+<br>
+
 Turn PDFs and EPUBs into spoken audio from a single local web app. Pick a page range, choose a TTS engine, preview what is available, and export either one MP3 or a ZIP of chapter files.
 
 This repo is optimized for practical use, not as a framework. It gives you one place to:
