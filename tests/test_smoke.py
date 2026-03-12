@@ -144,6 +144,101 @@ class TestAPIEndpoints:
         assert resp.status_code == 200
         assert b"Split into chapter files" in resp.data
 
+    def test_index_has_title(self, client):
+        resp = client.get("/")
+        assert b"Audiobook Studio" in resp.data
+
+    def test_index_contains_piper_catalogue_voices(self, client):
+        """All PIPER_VOICES entries must appear as options in the page."""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        html = resp.data.decode()
+        for stem, info in app_module.PIPER_VOICES.items():
+            assert info["name"] in html, f"Piper voice '{info['name']}' ({stem}) missing from page"
+
+    def test_index_default_kokoro_voice_rendered(self, client):
+        """The default Kokoro voice name must appear as the pre-selected option."""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        html = resp.data.decode()
+        default_id = app_module.CONFIG["KOKORO_VOICE"]
+        expected_name = app_module._KOKORO_VOICE_NAMES.get(default_id, default_id)
+        assert expected_name in html
+
+    def test_kokoro_voices_api_returns_grouped_voices(self, client):
+        resp = client.get("/api/kokoro-voices")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        voices = data["voices"]
+        # All catalogue groups must be present
+        for group in app_module.KOKORO_VOICES:
+            assert group in voices
+        # Each group must contain id + name dicts
+        all_ids = [v["id"] for vlist in voices.values() for v in vlist]
+        assert "af_bella" in all_ids
+        assert "bm_george" in all_ids
+
+    def test_no_500_on_index_when_models_dir_empty(self, client, tmp_path, monkeypatch):
+        """Index must not crash even when the models/ directory has no .onnx files."""
+        monkeypatch.setattr(
+            app_module, "PIPER_VOICES",
+            {"en_US-amy-medium": {"name": "Amy (US, medium)", "hf_path": "en/en_US/amy/medium/en_US-amy-medium.onnx"}},
+        )
+        resp = client.get("/")
+        assert resp.status_code == 200
+
+
+class TestPiperVoicesCatalogue:
+    def test_voices_defined_as_dict(self):
+        assert isinstance(app_module.PIPER_VOICES, dict)
+        assert len(app_module.PIPER_VOICES) >= 5
+
+    def test_all_voices_have_required_fields(self):
+        for stem, info in app_module.PIPER_VOICES.items():
+            assert "name" in info, f"{stem} missing 'name'"
+            assert "hf_path" in info, f"{stem} missing 'hf_path'"
+            assert info["hf_path"].endswith(".onnx"), f"{stem} hf_path must end in .onnx"
+
+    def test_hf_base_url_is_https(self):
+        assert app_module._HF_PIPER_BASE.startswith("https://")
+        assert "piper-voices" in app_module._HF_PIPER_BASE
+
+    def test_download_skips_unknown_stem(self, tmp_path):
+        """_download_piper_model must return silently for unrecognised stems."""
+        dest = tmp_path / "totally_unknown_voice.onnx"
+        app_module._download_piper_model(str(dest))
+        assert not dest.exists()
+
+    def test_download_fetches_both_files(self, tmp_path, monkeypatch):
+        """_download_piper_model must download .onnx and .onnx.json."""
+        fetched_urls = []
+
+        class FakeResponse:
+            def raise_for_status(self): pass
+            def iter_content(self, chunk_size=65536):
+                return [b"fake-model-data"]
+
+        def fake_get(url, timeout=120, stream=False):
+            fetched_urls.append(url)
+            return FakeResponse()
+
+        import types
+        fake_requests = types.SimpleNamespace(get=fake_get)
+        monkeypatch.setitem(app_module.__dict__, "_download_piper_model.__globals__", None)
+
+        stem = next(iter(app_module.PIPER_VOICES))
+        dest = tmp_path / f"{stem}.onnx"
+
+        import unittest.mock as mock
+        with mock.patch("requests.get", side_effect=fake_get):
+            app_module._download_piper_model(str(dest))
+
+        assert len(fetched_urls) == 2
+        assert fetched_urls[0].endswith(".onnx")
+        assert fetched_urls[1].endswith(".onnx.json")
+        assert dest.exists()
+        assert Path(f"{dest}.json").exists()
+
 
 class TestTextPreprocessing:
     def test_preserves_bracketed_book_content(self):

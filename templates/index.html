@@ -996,10 +996,10 @@
                 <label for="voice_piper">Piper model</label>
                 <select id="voice_piper" name="voice_piper">
                   {% for m in onnx_models %}
-                    <option value="{{ m }}" {% if m == config.PIPER_MODEL %}selected{% endif %}>{{ m.split('/')[-1] }}</option>
+                    <option value="{{ m.path }}" {% if m.path == config.PIPER_MODEL %}selected{% endif %}>{{ m.name }}{% if not m.downloaded %} ↓{% endif %}</option>
                   {% endfor %}
                 </select>
-                <span class="hint">ONNX voice models found in the project folder.</span>
+                <span class="hint">ONNX voice models. ↓ = downloads automatically on first use.</span>
                 <details>
                   <summary>Prosody settings</summary>
                   <div class="row-3">

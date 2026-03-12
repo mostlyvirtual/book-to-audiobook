@@ -252,6 +252,53 @@ _polly_status_cache = {
 }
 _POLLY_STATUS_TTL_SECONDS = 60
 
+# ---------------------------------------------------------------------------
+# Piper voice catalogue (auto-downloadable from rhasspy/piper-voices on HF)
+# ---------------------------------------------------------------------------
+PIPER_VOICES: dict[str, dict] = {
+    "en_US-amy-medium":          {"name": "Amy (US, medium)",     "hf_path": "en/en_US/amy/medium/en_US-amy-medium.onnx"},
+    "en_US-lessac-medium":       {"name": "Lessac (US, medium)",  "hf_path": "en/en_US/lessac/medium/en_US-lessac-medium.onnx"},
+    "en_US-lessac-high":         {"name": "Lessac (US, high)",    "hf_path": "en/en_US/lessac/high/en_US-lessac-high.onnx"},
+    "en_US-ryan-high":           {"name": "Ryan (US, high)",      "hf_path": "en/en_US/ryan/high/en_US-ryan-high.onnx"},
+    "en_GB-cori-high":           {"name": "Cori (GB, high)",      "hf_path": "en/en_GB/cori/high/en_GB-cori-high.onnx"},
+    "en_GB-alan-medium":         {"name": "Alan (GB, medium)",    "hf_path": "en/en_GB/alan/medium/en_GB-alan-medium.onnx"},
+    "en_GB-jenny_dioco-medium":  {"name": "Jenny (GB, medium)",   "hf_path": "en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium.onnx"},
+}
+_HF_PIPER_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0"
+
+# Backend → uv extra name mapping
+_BACKEND_EXTRA: dict[str, str] = {
+    "piper":       "piper",
+    "huggingface": "huggingface",
+    "hf_cloud":    "huggingface",
+    "speecht5":    "speecht5",
+    "supertonic":  "supertonic",
+    "xtts":        "xtts",
+    "xtts_ro":     "xtts",
+}
+
+
+def _download_piper_model(model_path: str) -> None:
+    """Stream .onnx + .onnx.json from rhasspy/piper-voices on HuggingFace."""
+    import requests as req
+    stem = Path(model_path).stem
+    if stem not in PIPER_VOICES:
+        return
+    info = PIPER_VOICES[stem]
+    models_dir = Path(model_path).parent
+    models_dir.mkdir(parents=True, exist_ok=True)
+    _report_downloading(f"Piper voice: {info['name']}")
+    for suffix in ("", ".json"):
+        url = f"{_HF_PIPER_BASE}/{info['hf_path']}{suffix}"
+        dest = Path(f"{model_path}{suffix}")
+        if dest.exists():
+            continue
+        r = req.get(url, timeout=120, stream=True)
+        r.raise_for_status()
+        with open(dest, "wb") as fh:
+            for chunk in r.iter_content(chunk_size=65536):
+                fh.write(chunk)
+
 
 def _validate_piper_model_files(model_path: str) -> str:
     """Validate Piper model + sidecar config JSON and return config path.
