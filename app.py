@@ -166,7 +166,12 @@ def _auto_install_extra(package: str, extra: str) -> None:
             f"Run manually: uv sync --extra {extra}\n"
             f"{result.stderr.strip()}"
         )
+    # invalidate_caches() clears finder caches; reload(site) re-processes
+    # site-packages .pth files so newly installed packages are importable
+    # in the current process without a server restart.
+    import site
     importlib.invalidate_caches()
+    importlib.reload(site)
     log.info("Extra '%s' installed successfully.", extra)
 
 
