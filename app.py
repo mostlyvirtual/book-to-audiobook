@@ -12,6 +12,7 @@ All configuration lives in .env — see .env for docs.
 """
 
 import io
+import json
 import os
 import re
 import time
@@ -65,8 +66,10 @@ CONFIG = {
     "KOKORO_SPEED": float(os.getenv("KOKORO_SPEED", "1.0")),
     "KOKORO_LANG": os.getenv("KOKORO_LANG", "a"),
     # Supertonic
-    "SUPERTONIC_VOICE": os.getenv("SUPERTONIC_VOICE", "default"),
+    "SUPERTONIC_VOICE": os.getenv("SUPERTONIC_VOICE", "F1"),
     "SUPERTONIC_LANG": os.getenv("SUPERTONIC_LANG", "en"),
+    "SUPERTONIC_SPEED": float(os.getenv("SUPERTONIC_SPEED", "1.05")),
+    "SUPERTONIC_SILENCE": float(os.getenv("SUPERTONIC_SILENCE", "0.3")),
 }
 
 MAX_UPLOAD_MB = 50
@@ -91,8 +94,38 @@ log = logging.getLogger(__name__)
 
 _piper_voice = None
 _hf_pipeline = None
-_kokoro_pipeline = None
+_kokoro_pipelines: dict[str, object] = {}
 _supertonic_tts = None
+
+
+def _validate_piper_model_files(model_path: str) -> str:
+    """Validate Piper model + sidecar config JSON and return config path.
+
+    Raises ValueError with actionable message when files are missing/corrupt.
+    """
+    model = Path(model_path)
+    if not model.is_file():
+        raise ValueError(f"Piper model not found: {model}")
+
+    config_path = Path(f"{model_path}.json")
+    if not config_path.is_file():
+        raise ValueError(
+            f"Piper config JSON not found: {config_path}. "
+            "Ensure the model sidecar .json file exists."
+        )
+
+    try:
+        with config_path.open("r", encoding="utf-8") as f:
+            parsed = json.load(f)
+        if not isinstance(parsed, dict) or not parsed:
+            raise ValueError("config JSON is empty or invalid object")
+    except Exception as e:
+        raise ValueError(
+            f"Piper config JSON is invalid: {config_path} ({e}). "
+            "Redownload this voice model or select a different one."
+        )
+
+    return str(config_path)
 
 
 def _get_piper_voice(model_path: str):
@@ -126,16 +159,16 @@ def _get_kokoro_pipeline(lang_code: str):
     Returns:
         KPipeline instance
     """
-    global _kokoro_pipeline
-    if _kokoro_pipeline is None:
+    global _kokoro_pipelines
+    if lang_code not in _kokoro_pipelines:
         try:
             from kokoro import KPipeline
             log.info("Loading Kokoro TTS pipeline for lang=%s", lang_code)
-            _kokoro_pipeline = KPipeline(lang_code=lang_code)
+            _kokoro_pipelines[lang_code] = KPipeline(lang_code=lang_code)
         except ImportError:
             log.error("Kokoro not installed. Install with: pip install kokoro")
             raise
-    return _kokoro_pipeline
+    return _kokoro_pipelines[lang_code]
 
 
 def _get_supertonic_tts():
@@ -497,10 +530,7 @@ def extract_text_from_epub(file_stream, page_range_str: str) -> tuple[str, str]:
             
             # Step 3: Parse page range
             total_items = len(spine_items)
-            try:
-                indices = parse_page_range(page_range_str, total_items)
-            except ValueError:
-                indices = list(range(total_items))
+            indices = parse_page_range(page_range_str, total_items)
             
             # Step 4: Extract text from selected spine items
             parts = []
@@ -514,7 +544,7 @@ def extract_text_from_epub(file_stream, page_range_str: str) -> tuple[str, str]:
                 try:
                     content = zf.read(full_path)
                     # Parse HTML/XHTML
-                    soup = BeautifulSoup(content, 'lxml')
+                    soup = BeautifulSoup(content, 'html.parser')
                     # Remove script and style elements
                     for el in soup(['script', 'style']):
                         el.decompose()
@@ -558,17 +588,23 @@ def build_output_filename(
     page_label: str,
     backend: str,
     provider_detail: str,
+    prosody: dict | None = None,
 ) -> str:
     """Create stable output names:
 
-    <ISO-UTC>_<book>_<pages>_<backend>_<voice-or-model>.mp3
+    <ISO-UTC>_<book>_<pages>_<backend>_<voice-or-model>[_prosody].mp3
     """
     iso_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     book = _slug_token(Path(pdf_filename).stem, max_len=60)
     pages = _slug_token(page_label, max_len=24)
     backend_token = _slug_token(backend, max_len=16)
     detail = _slug_token(provider_detail, max_len=80)
-    return f"{iso_ts}_{book}_{pages}_{backend_token}_{detail}.mp3"
+    base = f"{iso_ts}_{book}_{pages}_{backend_token}_{detail}"
+    if prosody:
+        tags = "_".join(f"{k}{v}" for k, v in sorted(prosody.items()) if v is not None)
+        if tags:
+            base += f"_{_slug_token(tags, max_len=80)}"
+    return f"{base}.mp3"
 
 
 # ---------------------------------------------------------------------------
@@ -676,6 +712,8 @@ def synthesize_piper(
     nws = noise_w_scale if noise_w_scale is not None else CONFIG["PIPER_NOISE_W_SCALE"]
     ss = sentence_silence if sentence_silence is not None else CONFIG["PIPER_SENTENCE_SILENCE"]
 
+    config_path = _validate_piper_model_files(model_path)
+
     wav_buf = io.BytesIO()
     try:
         from piper.config import SynthesisConfig
@@ -709,7 +747,7 @@ def synthesize_piper(
 
     except Exception as e:
         log.warning("Piper Python API failed (%s), falling back to CLI", e)
-        wav_buf = _synthesize_piper_cli(text, model_path, ls, ss)
+        wav_buf = _synthesize_piper_cli(text, model_path, config_path, ls, ss)
 
     wav_buf.seek(0)
     segment = AudioSegment.from_wav(wav_buf)
@@ -720,7 +758,7 @@ def synthesize_piper(
 
 
 def _synthesize_piper_cli(
-    text: str, model_path: str,
+    text: str, model_path: str, config_path: str,
     length_scale: float = 1.0, sentence_silence: float = 0.4,
 ) -> io.BytesIO:
     """Fallback: call the piper CLI binary with prosody flags."""
@@ -737,6 +775,7 @@ def _synthesize_piper_cli(
         cmd = [
             piper_bin,
             "--model", model_path,
+            "--config", config_path,
             "--output_file", tmp_path,
             "--length-scale", str(length_scale),
             "--sentence-silence", str(sentence_silence),
@@ -827,12 +866,18 @@ def synthesize_kokoro(text: str, voice: str, speed: float, lang_code: str) -> io
     
     for i, chunk in enumerate(chunks):
         try:
-            # Use pipe's generator interface to get audio
-            samples, sample_rate = pipe(chunk, voice=voice, speed=speed, return_numpy=True)
-            
-            # Ensure samples are float32 in range [-1, 1]
-            if samples.dtype != np.float32:
-                samples = samples.astype(np.float32)
+            # KPipeline.__call__ is a generator yielding Result objects
+            chunk_samples = []
+            for result in pipe(chunk, voice=voice, speed=speed):
+                if result.audio is not None:
+                    chunk_samples.append(result.audio.cpu().numpy())
+
+            if not chunk_samples:
+                log.warning("  Kokoro chunk %d produced no audio", i + 1)
+                continue
+
+            samples = np.concatenate(chunk_samples)
+            sample_rate = 24000  # Kokoro-82M outputs 24kHz audio
             
             # Normalize to 95% of int16 max to avoid clipping
             max_val = np.abs(samples).max()
@@ -867,13 +912,21 @@ def synthesize_kokoro(text: str, voice: str, speed: float, lang_code: str) -> io
     return mp3_buf
 
 
-def synthesize_supertonic(text: str, voice_name: str, lang: str) -> io.BytesIO:
+def synthesize_supertonic(
+    text: str,
+    voice_name: str,
+    lang: str,
+    speed: float = 1.05,
+    silence_duration: float = 0.3,
+) -> io.BytesIO:
     """Synthesize text → MP3 via Supertonic TTS.
     
     Args:
         text: Text to synthesize
         voice_name: Voice identifier from TTS.voices
         lang: Language code (e.g., 'en')
+        speed: Speech speed multiplier (default: 1.05)
+        silence_duration: Silence between chunks in seconds (default: 0.3)
     
     Returns:
         MP3 BytesIO buffer
@@ -883,23 +936,36 @@ def synthesize_supertonic(text: str, voice_name: str, lang: str) -> io.BytesIO:
     import numpy as np
     
     tts = _get_supertonic_tts()
-    log.info("Supertonic TTS: voice=%s, lang=%s, text_len=%d", voice_name, lang, len(text))
+    log.info("Supertonic TTS: voice=%s, lang=%s, speed=%.2f, silence=%.2f, text_len=%d",
+             voice_name, lang, speed, silence_duration, len(text))
     
     # Chunk text
     chunks = chunk_text(text, 3000)
     combined = AudioSegment.empty()
     silence = AudioSegment.silent(duration=400)
     
+    # Resolve configured style once; fallback to first available style if missing.
+    style_names = list(getattr(tts, "voice_style_names", []) or [])
+    style_name = voice_name if voice_name in style_names else (style_names[0] if style_names else "F1")
+    voice_style = tts.get_voice_style(style_name)
+
     for i, chunk in enumerate(chunks):
         try:
-            # Supertonic returns (waveform, sample_rate)
-            wav_array = tts.synthesize(chunk, voice=voice_name, lang=lang)
-            
-            if isinstance(wav_array, tuple):
-                samples, sample_rate = wav_array
+            # Supertonic returns (audio, metadata); sample rate is on engine.
+            synth_out = tts.synthesize(
+                chunk, voice_style=voice_style, lang=lang,
+                speed=speed, silence_duration=silence_duration, verbose=False,
+            )
+
+            if isinstance(synth_out, tuple):
+                samples = synth_out[0]
             else:
-                samples = wav_array
-                sample_rate = 22050  # Default fallback
+                samples = synth_out
+
+            sample_rate = int(getattr(tts, "sample_rate", 44100))
+
+            # Some versions return shape (1, N)
+            samples = np.array(samples).squeeze()
             
             # Ensure samples are correct dtype
             if samples.dtype != np.float32:
@@ -917,7 +983,7 @@ def synthesize_supertonic(text: str, voice_name: str, lang: str) -> io.BytesIO:
             with wave.open(wav_buf, "wb") as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
-                wf.setframerate(int(sample_rate))
+                wf.setframerate(sample_rate)
                 wf.writeframes(pcm.tobytes())
             
             wav_buf.seek(0)
@@ -948,7 +1014,14 @@ def index():
     project_dir = Path(__file__).parent
     # Discover .onnx models in models/ subfolder
     models_dir = project_dir / "models"
-    onnx_models = sorted(str(p) for p in models_dir.glob("*.onnx")) if models_dir.is_dir() else []
+    onnx_models: list[str] = []
+    if models_dir.is_dir():
+        for p in sorted(models_dir.glob("*.onnx")):
+            try:
+                _validate_piper_model_files(str(p))
+                onnx_models.append(str(p))
+            except ValueError as e:
+                log.warning("Skipping invalid Piper model in UI list: %s", e)
     # Discover PDFs and EPUBs in input/ folder
     input_dir = project_dir / "input"
     input_files = []
@@ -1059,16 +1132,9 @@ def api_supertonic_voices():
     """
     try:
         tts = _get_supertonic_tts()
-        # Get voice list from the loaded model
-        voices = list(tts.voices.keys()) if hasattr(tts, 'voices') else []
-        # Group by language if metadata available
-        by_lang = {}
-        for v in voices:
-            # Simple heuristic: first 2 chars = language code (e.g., 'en_emma' → 'en')
-            lang = v.split('_')[0] if '_' in v else 'unknown'
-            if lang not in by_lang:
-                by_lang[lang] = []
-            by_lang[lang].append({"id": v, "name": v})
+        # Supertonic exposes named voice styles (e.g., F1..F5, M1..M5).
+        styles = list(getattr(tts, "voice_style_names", []) or [])
+        by_lang = {"en": [{"id": s, "name": s} for s in styles]}
         return jsonify({"voices": by_lang})
     except Exception as e:
         log.warning("Failed to fetch Supertonic voices: %s", e)
@@ -1212,7 +1278,7 @@ def _api_epub_info(file_stream, filename: str):
                 
                 try:
                     content = zf.read(full_path)
-                    soup = BeautifulSoup(content, 'lxml')
+                    soup = BeautifulSoup(content, 'html.parser')
                     
                     # Try to extract title
                     for tag in soup(['h1', 'h2', 'h3']):
@@ -1322,6 +1388,8 @@ def convert():
     polly_chars_billed: int | None = None
     polly_cost_usd: float | None = None
     try:
+        prosody_info: dict = {}
+
         if backend == "polly":
             voice_id = voice or CONFIG["POLLY_VOICE_ID"]
             engine = request.form.get("engine", CONFIG["POLLY_ENGINE"])
@@ -1329,6 +1397,7 @@ def convert():
             mp3_buf, polly_chars_billed = synthesize_polly(text, voice_id, engine)
             rate = _POLLY_RATES.get(engine.lower(), _POLLY_RATES["neural"])
             polly_cost_usd = polly_chars_billed * rate / 1_000_000
+            prosody_info = {"engine": engine}
 
         elif backend == "piper":
             model_path = voice or CONFIG["PIPER_MODEL"]
@@ -1337,14 +1406,19 @@ def convert():
             def _float_or_none(key):
                 v = request.form.get(key, "").strip()
                 return float(v) if v else None
+            ls = _float_or_none("length_scale")
+            ns = _float_or_none("noise_scale")
+            nw = _float_or_none("noise_w_scale")
+            ss = _float_or_none("sentence_silence")
             mp3_buf = synthesize_piper(
                 text,
                 model_path,
-                length_scale=_float_or_none("length_scale"),
-                noise_scale=_float_or_none("noise_scale"),
-                noise_w_scale=_float_or_none("noise_w_scale"),
-                sentence_silence=_float_or_none("sentence_silence"),
+                length_scale=ls,
+                noise_scale=ns,
+                noise_w_scale=nw,
+                sentence_silence=ss,
             )
+            prosody_info = {"ls": ls, "ns": ns, "nw": nw, "ss": ss}
 
         elif backend == "huggingface":
             model_name = voice or CONFIG["HF_MODEL"]
@@ -1357,12 +1431,16 @@ def convert():
             lang_code = request.form.get("kokoro_lang", CONFIG["KOKORO_LANG"])
             provider_detail = f"{voice_id}"
             mp3_buf = synthesize_kokoro(text, voice_id, speed, lang_code)
+            prosody_info = {"spd": speed, "lang": lang_code}
 
         elif backend == "supertonic":
             voice_id = voice or CONFIG["SUPERTONIC_VOICE"]
             lang = request.form.get("supertonic_lang", CONFIG["SUPERTONIC_LANG"])
+            st_speed = float(request.form.get("supertonic_speed", CONFIG["SUPERTONIC_SPEED"]))
+            st_silence = float(request.form.get("supertonic_silence", CONFIG["SUPERTONIC_SILENCE"]))
             provider_detail = f"{voice_id}"
-            mp3_buf = synthesize_supertonic(text, voice_id, lang)
+            mp3_buf = synthesize_supertonic(text, voice_id, lang, speed=st_speed, silence_duration=st_silence)
+            prosody_info = {"spd": st_speed, "sil": st_silence, "lang": lang}
 
     except Exception as e:
         log.exception("TTS synthesis failed")
@@ -1371,7 +1449,7 @@ def convert():
     elapsed = time.time() - t0
     log.info("Done in %.1fs — serving MP3", elapsed)
 
-    filename = build_output_filename(pdf_filename, label, backend, provider_detail)
+    filename = build_output_filename(pdf_filename, label, backend, provider_detail, prosody_info)
 
     extra: dict = {}
     if polly_chars_billed is not None:

@@ -516,7 +516,7 @@
           <label for="kokoro_speed">Speed</label>
           <input type="number" id="kokoro_speed" name="kokoro_speed"
                  value="{{ config.KOKORO_SPEED }}" step="0.1" min="0.5" max="2.0">
-          <span class="hint">&lt;1 faster, &gt;1 slower</span>
+          <span class="hint">1.0 = normal, &gt;1 faster, &lt;1 slower</span>
         </div>
       </div>
       <span class="hint" id="kokoro-hint">Requires espeak-ng: <code>brew install espeak-ng</code></span>
@@ -525,10 +525,26 @@
 
     <!-- ===== Supertonic voice ===== -->
     <div class="voice-section" id="voice-supertonic" style="display:none">
-      <label for="voice_supertonic_id">Supertonic Voice</label>
-      <select id="voice_supertonic_id" name="voice_supertonic_id">
-        <option value="{{ config.SUPERTONIC_VOICE }}" selected>Loading voices...</option>
-      </select>
+      <div class="row">
+        <div>
+          <label for="voice_supertonic_id">Supertonic Voice</label>
+          <select id="voice_supertonic_id" name="voice_supertonic_id">
+            <option value="{{ config.SUPERTONIC_VOICE }}" selected>Loading voices...</option>
+          </select>
+        </div>
+        <div>
+          <label for="supertonic_speed">Speed</label>
+          <input type="number" id="supertonic_speed" name="supertonic_speed"
+                 value="{{ config.SUPERTONIC_SPEED }}" step="0.05" min="0.5" max="2.0">
+          <span class="hint">1.0 = normal, &gt;1 faster, &lt;1 slower</span>
+        </div>
+        <div>
+          <label for="supertonic_silence">Silence (s)</label>
+          <input type="number" id="supertonic_silence" name="supertonic_silence"
+                 value="{{ config.SUPERTONIC_SILENCE }}" step="0.1" min="0.0" max="2.0">
+          <span class="hint">Gap between chunks</span>
+        </div>
+      </div>
       <span class="hint" id="supertonic-hint">First run downloads ~305MB model.</span>
       <input type="hidden" id="supertonic_lang" name="supertonic_lang" value="{{ config.SUPERTONIC_LANG }}">
     </div>
@@ -884,8 +900,9 @@
         return;
       }
       const file = pdfFileInput.files[0];
-      if (!file.name.toLowerCase().endsWith('.pdf')) {
-        showStatus('Please select a .pdf file.', 'error');
+      const lower = file.name.toLowerCase();
+      if (!(lower.endsWith('.pdf') || lower.endsWith('.epub'))) {
+        showStatus('Please select a .pdf or .epub file.', 'error');
         return;
       }
     } else {
