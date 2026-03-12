@@ -60,12 +60,19 @@ CONFIG = {
     "PIPER_SENTENCE_SILENCE": float(os.getenv("PIPER_SENTENCE_SILENCE", "0.4")),
     # Hugging Face
     "HF_MODEL": os.getenv("HF_MODEL", "facebook/mms-tts-eng"),
+    # Kokoro
+    "KOKORO_VOICE": os.getenv("KOKORO_VOICE", "af_bella"),
+    "KOKORO_SPEED": float(os.getenv("KOKORO_SPEED", "1.0")),
+    "KOKORO_LANG": os.getenv("KOKORO_LANG", "a"),
+    # Supertonic
+    "SUPERTONIC_VOICE": os.getenv("SUPERTONIC_VOICE", "default"),
+    "SUPERTONIC_LANG": os.getenv("SUPERTONIC_LANG", "en"),
 }
 
 MAX_UPLOAD_MB = 50
 MAX_TEXT_CHARS = 500_000  # safety cap — ~200 pages of text
 POLLY_CHUNK_CHARS = 2800  # safe limit per Polly SynthesizeSpeech call
-ALLOWED_EXTENSIONS = {".pdf"}
+ALLOWED_EXTENSIONS = {".pdf", ".epub"}
 PDF_MAGIC = b"%PDF"
 
 app = Flask(__name__)
@@ -84,6 +91,8 @@ log = logging.getLogger(__name__)
 
 _piper_voice = None
 _hf_pipeline = None
+_kokoro_pipeline = None
+_supertonic_tts = None
 
 
 def _get_piper_voice(model_path: str):
@@ -109,19 +118,224 @@ def _get_hf_pipeline(model_name: str):
     return _hf_pipeline
 
 
+def _get_kokoro_pipeline(lang_code: str):
+    """Load Kokoro TTS pipeline once and cache it.
+    
+    Args:
+        lang_code: Language code (e.g., 'a' for American English, 'b' for British)
+    Returns:
+        KPipeline instance
+    """
+    global _kokoro_pipeline
+    if _kokoro_pipeline is None:
+        try:
+            from kokoro import KPipeline
+            log.info("Loading Kokoro TTS pipeline for lang=%s", lang_code)
+            _kokoro_pipeline = KPipeline(lang_code=lang_code)
+        except ImportError:
+            log.error("Kokoro not installed. Install with: pip install kokoro")
+            raise
+    return _kokoro_pipeline
+
+
+def _get_supertonic_tts():
+    """Load Supertonic TTS model once and cache it.
+    
+    Note: First call will download ~305MB model on demand.
+    """
+    global _supertonic_tts
+    if _supertonic_tts is None:
+        try:
+            from supertonic import TTS
+            log.info("Loading Supertonic TTS (may download ~305MB model on first run)")
+            _supertonic_tts = TTS(auto_download=True)
+        except ImportError:
+            log.error("Supertonic not installed. Install with: pip install supertonic")
+            raise
+    return _supertonic_tts
+
+
 # ---------------------------------------------------------------------------
 # Text preprocessing — makes TTS output sound like an audiobook
 # ---------------------------------------------------------------------------
 
 
+def _join_wrapped_lines(text: str) -> str:
+    """Join lines where current ends without punctuation and next starts lowercase.
+    
+    Fixes PDF hard-wraps like:
+      "This is impor-
+       tant information" → "This is important information"
+    """
+    lines = text.split('\n')
+    result = []
+    i = 0
+    while i < len(lines):
+        current = lines[i].rstrip()
+        # Check if next line exists and current line ends with a dash
+        if i + 1 < len(lines) and current.endswith('-'):
+            next_line = lines[i + 1].lstrip()
+            # If next line starts with lowercase letter, it's a continuation
+            if next_line and next_line[0].islower():
+                result.append(current[:-1] + next_line)
+                i += 2
+                continue
+        result.append(current)
+        i += 1
+    return '\n'.join(result)
+
+
+def _expand_abbreviations(text: str) -> str:
+    """Expand common abbreviations to help TTS pronunciation.
+    
+    Converts: Mr., Dr., e.g., etc., i.e., and ~15 more common abbreviations.
+    Uses word-boundary matching to avoid partial hits.
+    """
+    abbreviations = {
+        r'\bMr\.': 'Mister',
+        r'\bMrs\.': 'Misses',
+        r'\bMs\.': 'Ms',
+        r'\bDr\.': 'Doctor',
+        r'\bProf\.': 'Professor',
+        r'\bSt\.': 'Saint',
+        r'\be\.g\.': 'for example',
+        r'\bi\.e\.': 'that is',
+        r'\betc\.': 'et cetera',
+        r'\bvs\.': 'versus',
+        r'\bfig\.': 'figure',
+        r'\bno\.': 'number',
+        r'\bvol\.': 'volume',
+        r'\bed\.': 'edition',
+        r'\bpgs?\.': 'page',
+        r'\bet al\.': 'and others',
+    }
+    
+    for abbrev, expansion in abbreviations.items():
+        text = re.sub(abbrev, expansion, text, flags=re.IGNORECASE)
+    
+    return text
+
+
+def _convert_numbers(text: str) -> str:
+    """Convert numbers to words for better TTS pronunciation.
+    
+    Handles: integers, decimals, ordinals (1st→first), years (1800-2099),
+    currency ($123.45), percentages (45%). Caps at 6-digit numbers.
+    """
+    from num2words import num2words
+    
+    # Ordinals: 1st, 2nd, 3rd, 21st, etc.
+    def _ordinal_replace(match):
+        num_str = match.group(1)
+        try:
+            num = int(num_str)
+            if 1 <= num <= 999999:
+                return num2words(num, ordinal=True, lang='en')
+        except (ValueError, TypeError):
+            pass
+        return match.group(0)
+    
+    text = re.sub(r'\b(\d{1,6})(?:st|nd|rd|th)\b', _ordinal_replace, text, flags=re.IGNORECASE)
+    
+    # Currency: $123.45 or £5.99
+    def _currency_replace(match):
+        symbol = match.group(1)
+        amount_str = match.group(2).replace(',', '')
+        try:
+            amount = float(amount_str)
+            if amount < 1000000:
+                words = num2words(amount, to='currency', lang='en')
+                return words
+        except (ValueError, TypeError):
+            pass
+        return match.group(0)
+    
+    text = re.sub(r'([$£€])(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', _currency_replace, text)
+    
+    # Percentages: 45% → forty-five percent
+    def _percent_replace(match):
+        num_str = match.group(1)
+        try:
+            num = float(num_str)
+            if num < 1000000:
+                words = num2words(num, lang='en')
+                return f"{words} percent"
+        except (ValueError, TypeError):
+            pass
+        return match.group(0)
+    
+    text = re.sub(r'\b(\d{1,3}(?:\.\d{1,2})?)\s*%', _percent_replace, text)
+    
+    # Years (1800-2099): recognize patterns like "in 1995" or "from 2020"
+    # This is conservative — only replace if surrounded by year-context words
+    def _year_replace(match):
+        num_str = match.group(1)
+        try:
+            num = int(num_str)
+            if 1800 <= num <= 2099:
+                if num % 100 == 0:
+                    # Round century: 1900 → nineteen hundred
+                    return num2words(num, lang='en')
+                else:
+                    # Split: 1995 → nineteen ninety-five
+                    hundreds = num // 100
+                    remainder = num % 100
+                    h_words = num2words(hundreds, lang='en')
+                    if remainder == 0:
+                        return h_words + ' hundred'
+                    else:
+                        r_words = num2words(remainder, lang='en')
+                        return f"{h_words} {r_words}"
+        except (ValueError, TypeError):
+            pass
+        return match.group(0)
+    
+    # Only expand years in year-like contexts
+    text = re.sub(r'\b(1[89]\d{2}|20\d{2})\b(?=\s+(?:was|were|in|from|to|until|began|ended|through))', _year_replace, text, flags=re.IGNORECASE)
+    
+    return text
+
+
+def _remove_artifacts(text: str) -> str:
+    """Remove PDF extraction artifacts: citations, page numbers, URLs.
+    
+    Strips: [1], [Ref], page numbers, URLs, and common metadata junk.
+    """
+    # Remove citation brackets: [1], [2], [Ref 45], etc.
+    text = re.sub(r'\[\d+\]', '', text)
+    text = re.sub(r'\[[Rr]ef\s*\d+\]', '', text)
+    text = re.sub(r'\[[\w\s,]+\]', '', text)
+    
+    # Remove URLs
+    text = re.sub(r'https?://\S+', '', text)
+    text = re.sub(r'www\.\S+', '', text)
+    
+    # Remove footer/header page numbers (lines that are just digits)
+    text = re.sub(r'^[\s\-\d]+$', '', text, flags=re.MULTILINE)
+    
+    return text
+
+
 def preprocess_text_for_speech(text: str) -> str:
     """Clean up PDF-extracted text for more natural TTS output.
 
-    - Collapses PDF junk whitespace
-    - Normalizes punctuation for better pauses
-    - Adds sentence-ending punctuation where missing (so TTS engines pause)
-    - Converts paragraph breaks into explicit pause markers
+    Pipeline:
+    1. Join hard-wrapped lines (PDF line breaks)
+    2. Expand abbreviations (Mr. → Mister)
+    3. Convert numbers (45% → forty-five percent)
+    4. Normalize ligatures, whitespace, punctuation
+    5. Remove artifacts (citations, URLs, page numbers)
+    6. Add sentence-ending punctuation & pause markers
     """
+    # Step 1: Join wrapped lines
+    text = _join_wrapped_lines(text)
+    
+    # Step 2: Expand abbreviations
+    text = _expand_abbreviations(text)
+    
+    # Step 3: Convert numbers
+    text = _convert_numbers(text)
+    
     # Collapse multiple spaces/tabs into one
     text = re.sub(r"[ \t]+", " ", text)
 
@@ -159,6 +373,9 @@ def preprocess_text_for_speech(text: str) -> str:
     # Clean up doubled periods from above transforms
     text = re.sub(r"\.{2,}", ".", text)
     text = re.sub(r"\.\s*\.", ".", text)
+    
+    # Step 4: Remove artifacts (citations, URLs, page numbers)
+    text = _remove_artifacts(text)
 
     # Ensure text ends with punctuation
     text = text.strip()
@@ -223,6 +440,110 @@ def extract_text_from_pdf(file_stream, page_range_str: str) -> tuple[str, str]:
         label = f"p{indices[0]+1}-{indices[-1]+1}"
 
     return cleaned, label
+
+
+def extract_text_from_epub(file_stream, page_range_str: str) -> tuple[str, str]:
+    """Extract and preprocess text from selected EPUB chapters.
+    
+    For EPUB, "pages" are actually spine items (chapters/sections).
+    Supports page_range like "all", "1-5", "3".
+    """
+    import zipfile
+    from xml.etree import ElementTree as ET
+    from bs4 import BeautifulSoup
+    
+    try:
+        # Parse EPUB as ZIP
+        with zipfile.ZipFile(file_stream) as zf:
+            # Step 1: Find OPF file path from container.xml
+            try:
+                container_xml = zf.read('META-INF/container.xml')
+                root = ET.fromstring(container_xml)
+                # Find the rootfile element in the OPF namespace
+                rootfile = root.find('.//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile')
+                if rootfile is None:
+                    raise ValueError("No rootfile found in container.xml")
+                opf_path = rootfile.get('full-path')
+                if not opf_path:
+                    raise ValueError("rootfile has no full-path attribute")
+            except (KeyError, ET.ParseError) as e:
+                raise ValueError(f"Invalid EPUB: could not find OPF file: {e}")
+            
+            # Step 2: Parse OPF to get spine order
+            try:
+                opf_xml = zf.read(opf_path)
+                opf_root = ET.fromstring(opf_xml)
+                # Define namespace
+                ns = {'opf': 'http://www.idpf.org/2007/opf'}
+                
+                # Get manifest items
+                manifest = {}
+                for item in opf_root.findall('.//opf:item', ns):
+                    item_id = item.get('id')
+                    href = item.get('href')
+                    manifest[item_id] = href
+                
+                # Get spine order
+                spine_items = []
+                for itemref in opf_root.findall('.//opf:itemref', ns):
+                    item_id = itemref.get('idref')
+                    if item_id in manifest:
+                        spine_items.append(manifest[item_id])
+            except (KeyError, ET.ParseError) as e:
+                raise ValueError(f"Invalid EPUB: could not parse OPF: {e}")
+            
+            if not spine_items:
+                raise ValueError("EPUB has no content spine")
+            
+            # Step 3: Parse page range
+            total_items = len(spine_items)
+            try:
+                indices = parse_page_range(page_range_str, total_items)
+            except ValueError:
+                indices = list(range(total_items))
+            
+            # Step 4: Extract text from selected spine items
+            parts = []
+            opf_dir = str(Path(opf_path).parent)
+            
+            for idx in indices:
+                item_path = spine_items[idx]
+                # Resolve relative path
+                full_path = (Path(opf_dir) / item_path).as_posix()
+                
+                try:
+                    content = zf.read(full_path)
+                    # Parse HTML/XHTML
+                    soup = BeautifulSoup(content, 'lxml')
+                    # Remove script and style elements
+                    for el in soup(['script', 'style']):
+                        el.decompose()
+                    # Extract text
+                    text = soup.get_text(separator='\n')
+                    parts.append(text)
+                except KeyError:
+                    log.warning(f"EPUB: item not found at {full_path}")
+                    continue
+            
+            if not parts:
+                raise ValueError("No readable content found in EPUB")
+            
+            raw = "\n".join(parts)
+            cleaned = preprocess_text_for_speech(raw)
+            
+            # Create label
+            if page_range_str.strip().lower() == "all":
+                label = "all"
+            elif len(indices) == 1:
+                label = f"ch{indices[0]+1}"
+            else:
+                label = f"ch{indices[0]+1}-{indices[-1]+1}"
+            
+            return cleaned, label
+    
+    except Exception as e:
+        log.exception("EPUB extraction failed")
+        raise ValueError(f"Failed to extract EPUB: {e}")
 
 
 def _slug_token(value: str, max_len: int = 50) -> str:
@@ -475,6 +796,148 @@ def synthesize_huggingface(text: str, model_name: str) -> io.BytesIO:
     return mp3_buf
 
 
+def synthesize_kokoro(text: str, voice: str, speed: float, lang_code: str) -> io.BytesIO:
+    """Synthesize text → MP3 via Kokoro TTS.
+    
+    Args:
+        text: Text to synthesize
+        voice: Voice name (e.g., 'af_bella', 'bf_emma')
+        speed: Speech speed (0.5-2.0)
+        lang_code: Language code (e.g., 'a' for American, 'b' for British)
+    
+    Returns:
+        MP3 BytesIO buffer
+    
+    Note: Kokoro requires `espeak-ng` to be installed system-wide:
+          macOS: `brew install espeak-ng`
+          Linux: `apt-get install espeak-ng`
+    """
+    import numpy as np
+    
+    pipe = _get_kokoro_pipeline(lang_code)
+    log.info("Kokoro TTS: voice=%s, speed=%.2f, lang=%s, text_len=%d", 
+             voice, speed, lang_code, len(text))
+    
+    # Chunk text to avoid memory issues
+    chunks = chunk_text(text, 2000)
+    combined = AudioSegment.empty()
+    
+    # 400ms silence between chunks
+    silence = AudioSegment.silent(duration=400)
+    
+    for i, chunk in enumerate(chunks):
+        try:
+            # Use pipe's generator interface to get audio
+            samples, sample_rate = pipe(chunk, voice=voice, speed=speed, return_numpy=True)
+            
+            # Ensure samples are float32 in range [-1, 1]
+            if samples.dtype != np.float32:
+                samples = samples.astype(np.float32)
+            
+            # Normalize to 95% of int16 max to avoid clipping
+            max_val = np.abs(samples).max()
+            if max_val > 0:
+                samples = samples * (0.95 / max_val)
+            
+            # Convert to int16
+            pcm = (samples * 32767).astype(np.int16)
+            
+            wav_buf = io.BytesIO()
+            with wave.open(wav_buf, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(pcm.tobytes())
+            
+            wav_buf.seek(0)
+            segment = AudioSegment.from_wav(wav_buf)
+            combined += segment
+            
+            if i < len(chunks) - 1:
+                combined += silence
+            
+            log.info("  Kokoro chunk %d/%d done (%d chars)", i + 1, len(chunks), len(chunk))
+        except Exception as e:
+            log.exception("Kokoro chunk synthesis failed")
+            raise
+    
+    mp3_buf = io.BytesIO()
+    combined.export(mp3_buf, format="mp3", bitrate="128k")
+    mp3_buf.seek(0)
+    return mp3_buf
+
+
+def synthesize_supertonic(text: str, voice_name: str, lang: str) -> io.BytesIO:
+    """Synthesize text → MP3 via Supertonic TTS.
+    
+    Args:
+        text: Text to synthesize
+        voice_name: Voice identifier from TTS.voices
+        lang: Language code (e.g., 'en')
+    
+    Returns:
+        MP3 BytesIO buffer
+    
+    Note: First call downloads ~305MB model. Uses pure ONNX, no torch required.
+    """
+    import numpy as np
+    
+    tts = _get_supertonic_tts()
+    log.info("Supertonic TTS: voice=%s, lang=%s, text_len=%d", voice_name, lang, len(text))
+    
+    # Chunk text
+    chunks = chunk_text(text, 3000)
+    combined = AudioSegment.empty()
+    silence = AudioSegment.silent(duration=400)
+    
+    for i, chunk in enumerate(chunks):
+        try:
+            # Supertonic returns (waveform, sample_rate)
+            wav_array = tts.synthesize(chunk, voice=voice_name, lang=lang)
+            
+            if isinstance(wav_array, tuple):
+                samples, sample_rate = wav_array
+            else:
+                samples = wav_array
+                sample_rate = 22050  # Default fallback
+            
+            # Ensure samples are correct dtype
+            if samples.dtype != np.float32:
+                samples = samples.astype(np.float32)
+            
+            # Normalize
+            max_val = np.abs(samples).max()
+            if max_val > 0:
+                samples = samples * (0.95 / max_val)
+            
+            # Convert to int16
+            pcm = (samples * 32767).astype(np.int16)
+            
+            wav_buf = io.BytesIO()
+            with wave.open(wav_buf, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(int(sample_rate))
+                wf.writeframes(pcm.tobytes())
+            
+            wav_buf.seek(0)
+            segment = AudioSegment.from_wav(wav_buf)
+            combined += segment
+            
+            if i < len(chunks) - 1:
+                combined += silence
+            
+            log.info("  Supertonic chunk %d/%d done (%d chars)", i + 1, len(chunks), len(chunk))
+        except Exception as e:
+            log.exception("Supertonic chunk synthesis failed")
+            raise
+    
+    mp3_buf = io.BytesIO()
+    combined.export(mp3_buf, format="mp3", bitrate="128k")
+    mp3_buf.seek(0)
+    return mp3_buf
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -486,14 +949,19 @@ def index():
     # Discover .onnx models in models/ subfolder
     models_dir = project_dir / "models"
     onnx_models = sorted(str(p) for p in models_dir.glob("*.onnx")) if models_dir.is_dir() else []
-    # Discover PDFs in input/ folder
+    # Discover PDFs and EPUBs in input/ folder
     input_dir = project_dir / "input"
-    input_pdfs = sorted(p.name for p in input_dir.glob("*.pdf")) if input_dir.is_dir() else []
+    input_files = []
+    if input_dir.is_dir():
+        input_files = sorted(
+            p.name for p in input_dir.glob("*")
+            if p.suffix.lower() in {".pdf", ".epub"}
+        )
     return render_template(
         "index.html",
         config=CONFIG,
         onnx_models=onnx_models,
-        input_pdfs=input_pdfs,
+        input_pdfs=input_files,
     )
 
 
@@ -504,10 +972,15 @@ def _err(msg: str, status: int = 400):
 
 @app.route("/api/input-files")
 def api_input_files():
-    """Return list of PDFs in the input/ folder."""
+    """Return list of PDFs and EPUBs in the input/ folder."""
     input_dir = Path(__file__).parent / "input"
-    pdfs = sorted(p.name for p in input_dir.glob("*.pdf")) if input_dir.is_dir() else []
-    return jsonify({"files": pdfs})
+    files = []
+    if input_dir.is_dir():
+        files = sorted(
+            p.name for p in input_dir.glob("*")
+            if p.suffix.lower() in {".pdf", ".epub"}
+        )
+    return jsonify({"files": files})
 
 
 @app.route("/api/polly-voices")
@@ -534,11 +1007,80 @@ def api_polly_voices():
         return jsonify({"error": str(e), "voices": []})
 
 
+@app.route("/api/kokoro-voices")
+def api_kokoro_voices():
+    """Return available Kokoro voices grouped by accent.
+    
+    Kokoro has ~25 voices across American, British, and other accents.
+    Format: {accent}_{name} or {accent}_{gender}_{quality}
+    """
+    try:
+        # Hardcoded Kokoro voices (language-agnostic IDs)
+        voices = {
+            "American Female": [
+                {"id": "af_bella", "name": "Bella"},
+                {"id": "af_emma", "name": "Emma"},
+                {"id": "af_liam", "name": "Liam"},
+                {"id": "af_alice", "name": "Alice"},
+                {"id": "af_lily", "name": "Lily"},
+                {"id": "af_sarah", "name": "Sarah"},
+                {"id": "af_maya", "name": "Maya"},
+            ],
+            "American Male": [
+                {"id": "am_adam", "name": "Adam"},
+                {"id": "am_michael", "name": "Michael"},
+                {"id": "am_brian", "name": "Brian"},
+                {"id": "am_jack", "name": "Jack"},
+                {"id": "am_david", "name": "David"},
+            ],
+            "British Female": [
+                {"id": "bf_emma", "name": "Emma"},
+                {"id": "bf_lily", "name": "Lily"},
+                {"id": "bf_alice", "name": "Alice"},
+                {"id": "bf_rose", "name": "Rose"},
+            ],
+            "British Male": [
+                {"id": "bm_james", "name": "James"},
+                {"id": "bm_oliver", "name": "Oliver"},
+                {"id": "bm_george", "name": "George"},
+            ],
+        }
+        return jsonify({"voices": voices})
+    except Exception as e:
+        log.warning("Failed to fetch Kokoro voices: %s", e)
+        return jsonify({"error": str(e), "voices": {}})
+
+
+@app.route("/api/supertonic-voices")
+def api_supertonic_voices():
+    """Return available Supertonic voices (lazy-loads model on first call).
+    
+    Supertonic includes voices in multiple languages and styles.
+    """
+    try:
+        tts = _get_supertonic_tts()
+        # Get voice list from the loaded model
+        voices = list(tts.voices.keys()) if hasattr(tts, 'voices') else []
+        # Group by language if metadata available
+        by_lang = {}
+        for v in voices:
+            # Simple heuristic: first 2 chars = language code (e.g., 'en_emma' → 'en')
+            lang = v.split('_')[0] if '_' in v else 'unknown'
+            if lang not in by_lang:
+                by_lang[lang] = []
+            by_lang[lang].append({"id": v, "name": v})
+        return jsonify({"voices": by_lang})
+    except Exception as e:
+        log.warning("Failed to fetch Supertonic voices: %s", e)
+        return jsonify({"error": str(e), "voices": {}})
+
+
 @app.route("/api/pdf-info", methods=["POST"])
 def api_pdf_info():
-    """Return page count (and per-page text-presence) for a PDF.
+    """Return page/chapter count for a PDF or EPUB.
 
     Accepts either an uploaded file or an `input_file` name from input/.
+    For EPUB: "pages" are spine items (chapters).
     """
     input_name = request.form.get("input_file", "").strip()
     pdf_file = request.files.get("pdf")
@@ -547,13 +1089,29 @@ def api_pdf_info():
         pdf_path = Path(__file__).parent / "input" / Path(input_name).name
         if not pdf_path.is_file():
             return _err(f"File not found in input/: {input_name}")
-        reader = PdfReader(str(pdf_path))
+        file_ext = pdf_path.suffix.lower()
+        file_stream = open(pdf_path, "rb")
+        filename = pdf_path.name
     elif pdf_file:
-        reader = PdfReader(pdf_file.stream)
-        pdf_file.stream.seek(0)
+        file_ext = Path(pdf_file.filename).suffix.lower()
+        file_stream = pdf_file.stream
+        filename = pdf_file.filename
     else:
-        return _err("No PDF provided.")
+        return _err("No file provided.")
 
+    try:
+        if file_ext == ".epub":
+            return _api_epub_info(file_stream, filename)
+        else:  # .pdf
+            return _api_pdf_info_impl(file_stream, filename)
+    finally:
+        if input_name:
+            file_stream.close()
+
+
+def _api_pdf_info_impl(file_stream, filename: str):
+    """PDF-specific info extraction."""
+    reader = PdfReader(file_stream)
     total = len(reader.pages)
     pages = []
     for i, page in enumerate(reader.pages):
@@ -597,6 +1155,92 @@ def api_pdf_info():
     return jsonify({"total_pages": total, "pages": pages, "chapters": chapters})
 
 
+def _api_epub_info(file_stream, filename: str):
+    """EPUB-specific info extraction."""
+    import zipfile
+    from xml.etree import ElementTree as ET
+    from bs4 import BeautifulSoup
+    
+    try:
+        with zipfile.ZipFile(file_stream) as zf:
+            # Find OPF
+            try:
+                container_xml = zf.read('META-INF/container.xml')
+                root = ET.fromstring(container_xml)
+                rootfile = root.find('.//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile')
+                if rootfile is None:
+                    return _err("Invalid EPUB: no rootfile found")
+                opf_path = rootfile.get('full-path')
+                if not opf_path:
+                    return _err("Invalid EPUB: rootfile has no full-path")
+            except (KeyError, ET.ParseError) as e:
+                return _err(f"Invalid EPUB: could not parse container: {e}")
+            
+            # Parse OPF
+            try:
+                opf_xml = zf.read(opf_path)
+                opf_root = ET.fromstring(opf_xml)
+                ns = {'opf': 'http://www.idpf.org/2007/opf'}
+                
+                manifest = {}
+                for item in opf_root.findall('.//opf:item', ns):
+                    item_id = item.get('id')
+                    href = item.get('href')
+                    manifest[item_id] = href
+                
+                spine_items = []
+                for itemref in opf_root.findall('.//opf:itemref', ns):
+                    item_id = itemref.get('idref')
+                    if item_id in manifest:
+                        spine_items.append(manifest[item_id])
+            except (KeyError, ET.ParseError):
+                return _err("Invalid EPUB: could not parse OPF")
+            
+            if not spine_items:
+                return _err("EPUB has no content")
+            
+            # Build "pages" (spine items)
+            opf_dir = str(Path(opf_path).parent)
+            pages = []
+            chapters = []
+            
+            for i, item_path in enumerate(spine_items):
+                full_path = (Path(opf_dir) / item_path).as_posix()
+                has_text = False
+                char_count = 0
+                title = f"Chapter {i + 1}"
+                
+                try:
+                    content = zf.read(full_path)
+                    soup = BeautifulSoup(content, 'lxml')
+                    
+                    # Try to extract title
+                    for tag in soup(['h1', 'h2', 'h3']):
+                        if tag.get_text().strip():
+                            title = tag.get_text().strip()
+                            break
+                    
+                    # Count text
+                    text = soup.get_text().strip()
+                    has_text = len(text) > 20
+                    char_count = len(text)
+                except Exception:
+                    pass
+                
+                pages.append({"page": i + 1, "has_text": has_text, "chars": char_count})
+                chapters.append({"title": title, "page": i + 1, "depth": 0})
+            
+            return jsonify({
+                "total_pages": len(spine_items),
+                "pages": pages,
+                "chapters": chapters
+            })
+    
+    except Exception as e:
+        log.exception("EPUB info extraction failed")
+        return _err(f"Failed to read EPUB: {e}")
+
+
 @app.route("/convert", methods=["POST"])
 def convert():
     t0 = time.time()
@@ -606,7 +1250,7 @@ def convert():
     input_file_name = request.form.get("input_file", "").strip()
     pdf_file = request.files.get("pdf")
 
-    # Determine PDF source: input/ folder file or uploaded file
+    # Determine file source: input/ folder file or uploaded file
     if input_file_name:
         pdf_path = Path(__file__).parent / "input" / Path(input_file_name).name
         if not pdf_path.is_file():
@@ -616,21 +1260,25 @@ def convert():
     elif pdf_file and pdf_file.filename:
         ext = Path(pdf_file.filename).suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
-            return _err(f"Invalid file type '{ext}'. Only PDF files are accepted.")
-        header = pdf_file.stream.read(4)
-        pdf_file.stream.seek(0)
-        if header[:4] != PDF_MAGIC:
-            return _err("The uploaded file does not appear to be a valid PDF.")
+            return _err(f"Invalid file type '{ext}'. Only PDF and EPUB files are accepted.")
+        
+        # Check magic byte only for PDFs
+        if ext == ".pdf":
+            header = pdf_file.stream.read(4)
+            pdf_file.stream.seek(0)
+            if header[:4] != PDF_MAGIC:
+                return _err("The uploaded file does not appear to be a valid PDF.")
+        
         file_stream = pdf_file.stream
         pdf_filename = pdf_file.filename
     else:
-        return _err("Please upload a PDF file or select one from the input folder.")
+        return _err("Please upload a file or select one from the input folder.")
 
     page_range = request.form.get("page_range", "all").strip()
     backend = request.form.get("backend", CONFIG["DEFAULT_BACKEND"])
     voice = request.form.get("voice", "").strip()
 
-    if backend not in ("polly", "piper", "huggingface"):
+    if backend not in ("polly", "piper", "huggingface", "kokoro", "supertonic"):
         return _err(f"Unknown backend: {backend}")
 
     log.info(
@@ -644,7 +1292,11 @@ def convert():
 
     # --- Extract text ---
     try:
-        text, label = extract_text_from_pdf(file_stream, page_range)
+        file_ext = Path(pdf_filename).suffix.lower()
+        if file_ext == ".epub":
+            text, label = extract_text_from_epub(file_stream, page_range)
+        else:  # .pdf
+            text, label = extract_text_from_pdf(file_stream, page_range)
     except ValueError as e:
         return _err(str(e))
     finally:
@@ -654,7 +1306,7 @@ def convert():
     if not text.strip():
         return _err(
             "No extractable text found in the selected pages. "
-            "The PDF may contain scanned images instead of text."
+            "The file may contain scanned images instead of text."
         )
 
     if len(text) > MAX_TEXT_CHARS:
@@ -698,6 +1350,19 @@ def convert():
             model_name = voice or CONFIG["HF_MODEL"]
             provider_detail = model_name
             mp3_buf = synthesize_huggingface(text, model_name)
+
+        elif backend == "kokoro":
+            voice_id = voice or CONFIG["KOKORO_VOICE"]
+            speed = float(request.form.get("kokoro_speed", CONFIG["KOKORO_SPEED"]))
+            lang_code = request.form.get("kokoro_lang", CONFIG["KOKORO_LANG"])
+            provider_detail = f"{voice_id}"
+            mp3_buf = synthesize_kokoro(text, voice_id, speed, lang_code)
+
+        elif backend == "supertonic":
+            voice_id = voice or CONFIG["SUPERTONIC_VOICE"]
+            lang = request.form.get("supertonic_lang", CONFIG["SUPERTONIC_LANG"])
+            provider_detail = f"{voice_id}"
+            mp3_buf = synthesize_supertonic(text, voice_id, lang)
 
     except Exception as e:
         log.exception("TTS synthesis failed")

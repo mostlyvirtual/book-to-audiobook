@@ -22,6 +22,12 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 s3transfer==0.16.0
 six==1.17.0
+num2words==0.5.13
 sympy==1.14.0
 urllib3==2.6.3
 Werkzeug==3.1.6
+kokoro==1.0.0
+soundfile==0.13.1
+supertonic==0.1.0
+beautifulsoup4==4.12.2
+lxml==4.9.3

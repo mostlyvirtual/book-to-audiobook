@@ -406,7 +406,7 @@
     </div>
 
     <div id="source-upload">
-      <input type="file" id="pdf" name="pdf" accept=".pdf">
+      <input type="file" id="pdf" name="pdf" accept=".pdf,.epub">
     </div>
 
     <div id="source-input" style="display:none">
@@ -416,7 +416,7 @@
           <option value="{{ f }}">{{ f }}</option>
         {% endfor %}
       </select>
-      <span class="hint" style="margin-bottom:.6rem">Place PDFs in the <code>input/</code> folder and they appear here.</span>
+      <span class="hint" style="margin-bottom:.6rem">Place PDFs or EPUBs in the <code>input/</code> folder and they appear here.</span>
     </div>
     <input type="hidden" id="pdf_source" name="pdf_source" value="upload">
 
@@ -431,6 +431,8 @@
           <option value="piper" {% if config.DEFAULT_BACKEND == 'piper' %}selected{% endif %}>Piper (local)</option>
           <option value="polly" {% if config.DEFAULT_BACKEND == 'polly' %}selected{% endif %}>Amazon Polly</option>
           <option value="huggingface" {% if config.DEFAULT_BACKEND == 'huggingface' %}selected{% endif %}>Hugging Face</option>
+          <option value="kokoro" {% if config.DEFAULT_BACKEND == 'kokoro' %}selected{% endif %}>Kokoro (local)</option>
+          <option value="supertonic" {% if config.DEFAULT_BACKEND == 'supertonic' %}selected{% endif %}>Supertonic (local)</option>
         </select>
       </div>
     </div>
@@ -499,6 +501,36 @@
     <div class="voice-section" id="voice-huggingface" style="display:none">
       <label for="voice_hf">HF model name</label>
       <input type="text" id="voice_hf" name="voice_hf" value="{{ config.HF_MODEL }}" placeholder="e.g. facebook/mms-tts-eng">
+    </div>
+
+    <!-- ===== Kokoro voice ===== -->
+    <div class="voice-section" id="voice-kokoro" style="display:none">
+      <div class="row">
+        <div>
+          <label for="voice_kokoro_id">Kokoro Voice</label>
+          <select id="voice_kokoro_id" name="voice_kokoro_id">
+            <option value="{{ config.KOKORO_VOICE }}" selected>Loading voices...</option>
+          </select>
+        </div>
+        <div>
+          <label for="kokoro_speed">Speed</label>
+          <input type="number" id="kokoro_speed" name="kokoro_speed"
+                 value="{{ config.KOKORO_SPEED }}" step="0.1" min="0.5" max="2.0">
+          <span class="hint">&lt;1 faster, &gt;1 slower</span>
+        </div>
+      </div>
+      <span class="hint" id="kokoro-hint">Requires espeak-ng: <code>brew install espeak-ng</code></span>
+      <input type="hidden" id="kokoro_lang" name="kokoro_lang" value="{{ config.KOKORO_LANG }}">
+    </div>
+
+    <!-- ===== Supertonic voice ===== -->
+    <div class="voice-section" id="voice-supertonic" style="display:none">
+      <label for="voice_supertonic_id">Supertonic Voice</label>
+      <select id="voice_supertonic_id" name="voice_supertonic_id">
+        <option value="{{ config.SUPERTONIC_VOICE }}" selected>Loading voices...</option>
+      </select>
+      <span class="hint" id="supertonic-hint">First run downloads ~305MB model.</span>
+      <input type="hidden" id="supertonic_lang" name="supertonic_lang" value="{{ config.SUPERTONIC_LANG }}">
     </div>
 
     <div class="toggle-row">
@@ -639,10 +671,13 @@
     piper:       document.getElementById('voice-piper'),
     polly:       document.getElementById('voice-polly'),
     huggingface: document.getElementById('voice-huggingface'),
+    kokoro:      document.getElementById('voice-kokoro'),
+    supertonic:  document.getElementById('voice-supertonic'),
   };
 
   function updateVoice() {
     Object.entries(sections).forEach(([key, section]) => {
+      if (!section) return;  // Handle undefined sections gracefully
       const isActive = key === backendSel.value;
       section.style.display = isActive ? '' : 'none';
       section.querySelectorAll('input, select, textarea, button').forEach(el => {
@@ -651,7 +686,11 @@
     });
     const active = sections[backendSel.value];
     if (active) active.style.display = '';
+    
+    // Fetch voices for active backend
     if (backendSel.value === 'polly') fetchPollyVoices();
+    if (backendSel.value === 'kokoro') fetchKokoroVoices();
+    if (backendSel.value === 'supertonic') fetchSupertTonicVoices();
   }
   backendSel.addEventListener('change', updateVoice);
   updateVoice();
@@ -709,7 +748,89 @@
       pollyVoiceSel.innerHTML = '<option value="">No voices for this engine</option>';
     }
   }
-  pollyEngineSel.addEventListener('change', renderPollyVoices);
+  // ---- Dynamic Kokoro voices ----
+  const kokoroVoiceSel = document.getElementById('voice_kokoro_id');
+  const kokoroHint = document.getElementById('kokoro-hint');
+  let kokoroVoicesCache = null;
+
+  async function fetchKokoroVoices() {
+    if (kokoroVoicesCache) { renderKokoroVoices(); return; }
+    try {
+      const resp = await fetch('/api/kokoro-voices');
+      const data = await resp.json();
+      if (data.error) {
+        kokoroHint.textContent = 'Could not load voices: ' + data.error;
+        return;
+      }
+      kokoroVoicesCache = data.voices;
+      renderKokoroVoices();
+    } catch (e) {
+      kokoroHint.textContent = 'Failed to load voices.';
+    }
+  }
+
+  function renderKokoroVoices() {
+    if (!kokoroVoicesCache) return;
+    const current = kokoroVoiceSel.value;
+    kokoroVoiceSel.innerHTML = '';
+    
+    // Group by accent
+    for (const [accent, voices] of Object.entries(kokoroVoicesCache)) {
+      const optgroup = document.createElement('optgroup');
+      optgroup.label = accent;
+      for (const v of voices) {
+        const opt = document.createElement('option');
+        opt.value = v.id;
+        opt.textContent = v.name;
+        if (v.id === current) opt.selected = true;
+        optgroup.appendChild(opt);
+      }
+      kokoroVoiceSel.appendChild(optgroup);
+    }
+  }
+
+  // ---- Dynamic Supertonic voices ----
+  const supertonicVoiceSel = document.getElementById('voice_supertonic_id');
+  const supertonic_hint = document.getElementById('supertonic-hint');
+  let supertonic_voices_cache = null;
+
+  async function fetchSupertTonicVoices() {
+    if (supertonic_voices_cache) { renderSupertTonicVoices(); return; }
+    supertonic_hint.textContent = 'Loading voices...';
+    try {
+      const resp = await fetch('/api/supertonic-voices');
+      const data = await resp.json();
+      if (data.error) {
+        supertonic_hint.textContent = 'Could not load voices: ' + data.error;
+        return;
+      }
+      supertonic_voices_cache = data.voices;
+      renderSupertTonicVoices();
+      supertonic_hint.textContent = 'First run downloads ~305MB model.';
+    } catch (e) {
+      supertonic_hint.textContent = 'Failed to load voices.';
+    }
+  }
+
+  function renderSupertTonicVoices() {
+    if (!supertonic_voices_cache) return;
+    const current = supertonicVoiceSel.value;
+    supertonicVoiceSel.innerHTML = '';
+    
+    // Group by language
+    for (const [lang, voices] of Object.entries(supertonic_voices_cache)) {
+      const optgroup = document.createElement('optgroup');
+      optgroup.label = lang;
+      for (const v of voices) {
+        const opt = document.createElement('option');
+        opt.value = v.id;
+        opt.textContent = v.name;
+        if (v.id === current) opt.selected = true;
+        optgroup.appendChild(opt);
+      }
+      supertonicVoiceSel.appendChild(optgroup);
+    }
+  }
 
   const overlay   = document.getElementById('overlay');
   const statusDiv  = document.getElementById('status');
@@ -794,6 +915,8 @@
     if (backend === 'piper')       voiceVal = document.getElementById('voice_piper').value;
     if (backend === 'polly')       voiceVal = document.getElementById('voice_polly_id').value;
     if (backend === 'huggingface') voiceVal = document.getElementById('voice_hf').value;
+    if (backend === 'kokoro')      voiceVal = document.getElementById('voice_kokoro_id').value;
+    if (backend === 'supertonic')  voiceVal = document.getElementById('voice_supertonic_id').value;
     fd.set('voice', voiceVal);
 
     overlay.classList.add('active');
