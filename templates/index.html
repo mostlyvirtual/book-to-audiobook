@@ -430,7 +430,7 @@
         <select id="backend" name="backend">
           <option value="piper" {% if config.DEFAULT_BACKEND == 'piper' %}selected{% endif %}>Piper (local)</option>
           <option value="polly" {% if config.DEFAULT_BACKEND == 'polly' %}selected{% endif %}>Amazon Polly</option>
-          <option value="huggingface" {% if config.DEFAULT_BACKEND == 'huggingface' %}selected{% endif %}>Hugging Face</option>
+          <option value="huggingface" {% if config.DEFAULT_BACKEND == 'huggingface' %}selected{% endif %}>Hugging Face (local)</option>
           <option value="kokoro" {% if config.DEFAULT_BACKEND == 'kokoro' %}selected{% endif %}>Kokoro (local)</option>
           <option value="supertonic" {% if config.DEFAULT_BACKEND == 'supertonic' %}selected{% endif %}>Supertonic (local)</option>
         </select>
