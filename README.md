@@ -51,7 +51,7 @@ The shortest clean setup is two commands:
 
 ```bash
 ./scripts/bootstrap.sh
-uv run book-to-audiobook
+uv run python app.py
 ```
 
 Then open `http://localhost:1234`.
@@ -60,7 +60,7 @@ If you want every optional backend as well:
 
 ```bash
 ./scripts/bootstrap.sh --all
-uv run book-to-audiobook
+uv run python app.py
 ```
 
 ### What the bootstrap script does
@@ -195,7 +195,7 @@ You do not need to fill everything in up front. For a first successful run, the 
 ### 6. Start the app
 
 ```bash
-uv run book-to-audiobook
+uv run python app.py
 ```
 
 Open:
@@ -221,7 +221,7 @@ uv sync --dev
 uv sync --dev --extra all
 uv lock
 uv sync --frozen --dev
-uv run book-to-audiobook
+uv run python app.py
 uv run pytest tests/test_smoke.py -q
 ```
 

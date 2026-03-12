@@ -131,5 +131,5 @@ cat <<'EOF'
 Setup complete.
 
 Run the app with:
-  uv run book-to-audiobook
+  uv run python app.py
 EOF

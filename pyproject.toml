@@ -22,9 +22,6 @@ dependencies = [
   "requests>=2.32.5",
 ]
 
-[project.scripts]
-book-to-audiobook = "app:main"
-
 [project.optional-dependencies]
 ocr = [
   "easyocr>=1.7.0",
