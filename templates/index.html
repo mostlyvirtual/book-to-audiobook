@@ -857,7 +857,7 @@
     {% endfor %}
   {% endwith %}
 
-  <form method="post" action="/convert" enctype="multipart/form-data" id="convertForm">
+  <form method="post" action="/convert" enctype="multipart/form-data" id="convertForm" novalidate>
 
     <div class="wizard">
 
@@ -1558,6 +1558,7 @@
 
     // Chapter mode toggle
     const chapterHint = document.getElementById('chapterModeHint');
+    chapterHint.textContent = '';
     if (chapters && chapters.length > 0) {
       chapterHint.textContent = `(${chapters.length} chapter files \u2192 ZIP of MP3s)`;
     }
