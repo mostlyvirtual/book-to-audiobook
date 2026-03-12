@@ -510,9 +510,90 @@
     .chapter-item .ch-page { flex-shrink: 0; margin-left: .6rem; color: var(--accent); font-variant-numeric: tabular-nums; }
     .chapter-item.depth-1 { padding-left: 1rem; font-size: .72rem; }
 
-    /* ============================================================
-       REVIEW CARD
-       ============================================================ */
+    /* === Voice Preview (inline inside Engine & Voice step) === */
+    .voice-preview {
+      border-top: 1px solid var(--border);
+      margin-top: 1.1rem;
+      padding-top: .85rem;
+    }
+    .voice-preview-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      cursor: pointer;
+      user-select: none;
+    }
+    .voice-preview-title:hover { color: var(--text); }
+    .voice-preview-title svg.mic-icon { width: 14px; height: 14px; color: var(--accent); }
+    .voice-preview-title .vp-chevron {
+      margin-left: auto;
+      width: 14px; height: 14px;
+      transition: transform .2s;
+      color: var(--text-dim);
+    }
+    .voice-preview.open .vp-chevron { transform: rotate(180deg); }
+    .voice-preview-body {
+      display: none;
+      margin-top: .75rem;
+    }
+    .voice-preview.open .voice-preview-body { display: block; }
+    .voice-preview textarea {
+      width: 100%;
+      resize: vertical;
+      min-height: 60px;
+      padding: .55rem .65rem;
+      font-family: var(--font);
+      font-size: .83rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface2);
+      color: var(--text);
+      outline: none;
+      transition: border-color .15s;
+    }
+    .voice-preview textarea:focus { border-color: var(--accent); background: var(--surface); }
+    .voice-preview-row {
+      display: flex;
+      align-items: center;
+      gap: .7rem;
+      margin-top: .65rem;
+      flex-wrap: wrap;
+    }
+    .btn-preview {
+      font-family: var(--font);
+      font-size: .78rem;
+      font-weight: 600;
+      padding: .42rem 1rem;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background .15s;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: .4rem;
+    }
+    .btn-preview:hover { background: var(--accent-hover); }
+    .btn-preview:disabled { opacity: .55; cursor: not-allowed; }
+    .voice-preview audio {
+      flex: 1;
+      min-width: 160px;
+      height: 34px;
+    }
+    .voice-preview .preview-hint {
+      font-size: .72rem;
+      color: var(--text-muted);
+      margin-top: .45rem;
+    }
+
+    /* === REVIEW CARD === */
     .review-card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -672,6 +753,27 @@
       transition: width .3s ease;
     }
     .progress-label { font-size: .78rem; color: var(--text-muted); }
+    .overlay-controls {
+      display: flex;
+      gap: .6rem;
+      justify-content: center;
+      margin-top: .9rem;
+    }
+    .overlay-controls button {
+      font-family: var(--font);
+      font-size: .75rem;
+      font-weight: 600;
+      padding: .35rem .85rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: background .15s, color .15s;
+      line-height: 1.4;
+    }
+    #pauseBtn  { background: var(--surface2); color: var(--text-secondary); }
+    #resumeBtn { background: var(--success-bg); color: var(--success); }
+    #cancelBtn { background: #fff0f0; color: #c0392b; }
+    .overlay-controls button:hover { filter: brightness(.93); }
 
     /* === Voice Cloning page === */
     .card {
@@ -754,26 +856,6 @@
       <div class="flash {{ cat }}">{{ msg }}</div>
     {% endfor %}
   {% endwith %}
-
-  <div id="status" class="flash error" style="display:none"></div>
-
-  <div id="result-card" class="result-card" style="display:none">
-    <div class="result-header">
-      <span class="result-icon">&#10003;</span>
-      <span id="result-title">Conversion complete</span>
-    </div>
-    <div class="result-filename" id="result-filename"></div>
-    <div class="result-stats" id="result-stats" style="display:none">
-      <div class="stat">
-        <span class="stat-label">Characters billed</span>
-        <span class="stat-value" id="stat-chars">&mdash;</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Estimated cost</span>
-        <span class="stat-value" id="stat-cost">&mdash;</span>
-      </div>
-    </div>
-  </div>
 
   <form method="post" action="/convert" enctype="multipart/form-data" id="convertForm">
 
@@ -1089,12 +1171,52 @@
                 <span class="hint">Requires HF_TOKEN in .env. Free tier is rate-limited.</span>
               </div>
 
+              <!-- Voice Preview (collapsed by default) -->
+              <div class="voice-preview" id="voicePreview">
+                <div class="voice-preview-title" id="voicePreviewToggle">
+                  <svg class="mic-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2a2 2 0 0 0-2 2v4a2 2 0 0 0 4 0V4a2 2 0 0 0-2-2Z"/><path d="M12.5 8a4.5 4.5 0 0 1-9 0"/><line x1="8" y1="12.5" x2="8" y2="14.5"/></svg>
+                  Voice Preview
+                  <svg class="vp-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+                </div>
+                <div class="voice-preview-body">
+                  <textarea id="previewText" maxlength="500" rows="2">The quick brown fox jumps over the lazy dog.</textarea>
+                  <div class="voice-preview-row">
+                    <button type="button" class="btn-preview" id="previewBtn">
+                      <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12"><polygon points="4,2 14,8 4,14" /></svg>
+                      Generate Preview
+                    </button>
+                    <audio id="previewAudio" controls style="display:none"></audio>
+                    <span class="preview-hint" id="previewStatus">Max 500 chars &middot; uses current engine &amp; voice</span>
+                  </div>
+                </div>
+              </div>
+
             </div>
           </div>
         </div>
       </div>
 
     </div><!-- /wizard -->
+
+    <div id="status" class="flash error" style="display:none"></div>
+
+    <div id="result-card" class="result-card" style="display:none">
+      <div class="result-header">
+        <span class="result-icon">&#10003;</span>
+        <span id="result-title">Conversion complete</span>
+      </div>
+      <div class="result-filename" id="result-filename"></div>
+      <div class="result-stats" id="result-stats" style="display:none">
+        <div class="stat">
+          <span class="stat-label">Characters billed</span>
+          <span class="stat-value" id="stat-chars">&mdash;</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Estimated cost</span>
+          <span class="stat-value" id="stat-cost">&mdash;</span>
+        </div>
+      </div>
+    </div>
 
     <!-- ============================================================
          REVIEW CARD — Summary + Output Options + Convert
@@ -1177,6 +1299,11 @@
       <div class="progress-fill" id="progress-fill"></div>
     </div>
     <p class="progress-label" id="progress-label"></p>
+    <div class="overlay-controls" id="jobControls" style="display:none">
+      <button type="button" id="pauseBtn">&#9646;&#9646; Pause</button>
+      <button type="button" id="resumeBtn" style="display:none">&#9654; Resume</button>
+      <button type="button" id="cancelBtn">&#9632; Cancel</button>
+    </div>
   </div>
 </div>
 
@@ -1423,28 +1550,39 @@
 
     const link = pageInfoDiv.querySelector('.suggest-range');
     if (link) {
-      link.addEventListener('click', e => { e.preventDefault(); pageRangeInput.value = link.dataset.range; updateStepStates(); });
+      link.addEventListener('click', e => { e.preventDefault(); pageRangeInput.value = link.dataset.range; updateStepStates(); updateChapterRow(); });
     }
     pageInfoDiv.querySelectorAll('.chapter-item').forEach(el => {
-      el.addEventListener('click', () => { pageRangeInput.value = el.dataset.range; updateStepStates(); });
+      el.addEventListener('click', () => { pageRangeInput.value = el.dataset.range; updateStepStates(); updateChapterRow(); });
     });
 
     // Chapter mode toggle
-    const chapterRow  = document.getElementById('chapterModeRow');
     const chapterHint = document.getElementById('chapterModeHint');
     if (chapters && chapters.length > 0) {
-      chapterRow.style.display = '';
       chapterHint.textContent = `(${chapters.length} chapter files \u2192 ZIP of MP3s)`;
+    }
+    updateChapterRow();
+  }
+
+  function updateChapterRow() {
+    const chapterRow  = document.getElementById('chapterModeRow');
+    const chapterHint = document.getElementById('chapterModeHint');
+    const pagesVal    = pageRangeInput.value.trim().toLowerCase();
+    const isAll       = pagesVal === 'all' || pagesVal === '';
+    const hasChapters = chapterHint.textContent.length > 0;
+    if (isAll && hasChapters) {
+      chapterRow.style.display = '';
     } else {
       chapterRow.style.display = 'none';
       document.getElementById('chapter_mode').checked = false;
+      document.getElementById('convertBtnLabel').textContent = 'Convert to MP3';
     }
   }
 
   // Source change triggers: fetch page info + advance + update
   bookFileInput.addEventListener('change', () => { fetchPageInfo(); updateStepStates(); advanceFromSource(); });
   inputFileSel.addEventListener('change', ()  => { fetchPageInfo(); updateStepStates(); advanceFromSource(); });
-  pageRangeInput.addEventListener('input', updateStepStates);
+  pageRangeInput.addEventListener('input', () => { updateStepStates(); updateChapterRow(); });
 
   /* ============================================================
      CHAPTER MODE TOGGLE
@@ -1472,7 +1610,7 @@
 
   const statusDot  = document.querySelector('#backendStatus .status-dot');
   const statusText = document.getElementById('backendStatusText');
-  let backendStatusCache = null;
+  var backendStatusCache = null;
 
   function updateBackendStatus() {
     if (!backendStatusCache) return;
@@ -1586,7 +1724,7 @@
      ============================================================ */
   const kokoroVoiceSel = document.getElementById('voice_kokoro_id');
   const kokoroHint = document.getElementById('kokoro-hint');
-  let kokoroVoicesCache = null;
+  var kokoroVoicesCache = null;
 
   async function fetchKokoroVoices() {
     if (kokoroVoicesCache) { renderKokoroVoices(); return; }
@@ -1752,12 +1890,34 @@
     progressFill.style.width = '0%';
     progressPhase.textContent = 'Extracting text\u2026';
     progressLabel.textContent = '';
+    const jobControls = document.getElementById('jobControls');
+    const pauseBtn   = document.getElementById('pauseBtn');
+    const resumeBtn  = document.getElementById('resumeBtn');
+    const cancelBtn  = document.getElementById('cancelBtn');
+    jobControls.style.display = '';
+    pauseBtn.style.display = ''; resumeBtn.style.display = 'none';
     overlay.classList.add('active');
+
+    const controller = new AbortController();
+
+    pauseBtn.onclick = () => fetch('/api/job/' + jobId + '/pause', {method:'POST'});
+    resumeBtn.onclick = () => fetch('/api/job/' + jobId + '/resume', {method:'POST'});
+    cancelBtn.onclick = () => {
+      if (confirm('Cancel this conversion?')) {
+        fetch('/api/job/' + jobId + '/cancel', {method:'POST'});
+        controller.abort();
+      }
+    };
 
     let pollTimer = setInterval(async () => {
       try {
         const r = await fetch('/progress/' + jobId);
         const p = await r.json();
+        if (p.paused) {
+          pauseBtn.style.display = 'none'; resumeBtn.style.display = 'inline-block';
+        } else {
+          pauseBtn.style.display = ''; resumeBtn.style.display = 'none';
+        }
         if (p.phase === 'extracting') {
           progressPhase.textContent = 'Extracting text\u2026';
           progressFill.style.width = '5%';
@@ -1778,7 +1938,7 @@
     }, 500);
 
     try {
-      const resp = await fetch('/convert', { method: 'POST', body: fd });
+      const resp = await fetch('/convert', { method: 'POST', body: fd, signal: controller.signal });
       clearInterval(pollTimer);
       progressFill.style.width = '100%';
       progressPhase.textContent = 'Done!';
@@ -1817,7 +1977,9 @@
 
     } catch (err) {
       clearInterval(pollTimer);
-      showStatus('Network error: ' + err.message, 'error');
+      if (err.name !== 'AbortError') {
+        showStatus('Network error: ' + err.message, 'error');
+      }
     } finally {
       overlay.classList.remove('active');
     }
@@ -1942,6 +2104,72 @@
   // Init: load references, set initial states
   loadRefVoices();
   updateStepStates();
+
+  /* ============================================================
+     VOICE PREVIEW TOGGLE
+     ============================================================ */
+  document.getElementById('voicePreviewToggle').addEventListener('click', () => {
+    document.getElementById('voicePreview').classList.toggle('open');
+  });
+
+  /* ============================================================
+     VOICE PREVIEW
+     ============================================================ */
+  const previewBtn    = document.getElementById('previewBtn');
+  const previewText   = document.getElementById('previewText');
+  const previewAudio  = document.getElementById('previewAudio');
+  const previewStatus = document.getElementById('previewStatus');
+
+  previewBtn.addEventListener('click', async () => {
+    const text = previewText.value.trim();
+    if (!text) { previewStatus.textContent = 'Enter some text first.'; return; }
+
+    const backend = backendSel.value;
+    let voice = '';
+    if (backend === 'piper')       voice = document.getElementById('voice_piper').value;
+    if (backend === 'polly')       voice = document.getElementById('voice_polly_id').value;
+    if (backend === 'huggingface') {
+      const custom = document.getElementById('voice_hf').value.trim();
+      voice = custom || document.getElementById('voice_hf_select').value;
+    }
+    if (backend === 'kokoro')      voice = document.getElementById('voice_kokoro_id').value;
+    if (backend === 'supertonic')  voice = document.getElementById('voice_supertonic_id').value;
+    if (backend === 'hf_cloud') {
+      const custom = document.getElementById('voice_hf_cloud').value.trim();
+      voice = custom || document.getElementById('voice_hf_cloud_select').value;
+    }
+
+    const fd = new FormData(form);
+    fd.set('backend', backend);
+    fd.set('voice', voice);
+    fd.set('text', text);
+
+    previewBtn.disabled = true;
+    previewStatus.textContent = 'Generating\u2026';
+    previewAudio.style.display = 'none';
+
+    try {
+      const resp = await fetch('/api/voice-test', { method: 'POST', body: fd });
+      if (!resp.ok) {
+        let msg = 'Preview failed.';
+        try { const j = await resp.json(); if (j.error) msg = j.error; } catch (_) {}
+        previewStatus.textContent = msg;
+        return;
+      }
+      const blob = await resp.blob();
+      const url  = URL.createObjectURL(blob);
+      if (previewAudio._prevUrl) URL.revokeObjectURL(previewAudio._prevUrl);
+      previewAudio._prevUrl = url;
+      previewAudio.src = url;
+      previewAudio.style.display = '';
+      previewAudio.play();
+      previewStatus.textContent = 'Max 500 chars \u00b7 uses current engine & voice';
+    } catch (err) {
+      previewStatus.textContent = 'Network error: ' + err.message;
+    } finally {
+      previewBtn.disabled = false;
+    }
+  });
 </script>
 </body>
 </html>

@@ -21,6 +21,7 @@ import wave
 import logging
 import tempfile
 import threading
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,7 +49,7 @@ from flask import (
     redirect,
     url_for,
 )
-from pypdf import PdfReader
+import fitz  # PyMuPDF
 from pydub import AudioSegment
 
 # ---------------------------------------------------------------------------
@@ -104,8 +105,26 @@ log = logging.getLogger(__name__)
 # Job progress tracking (polled by frontend during conversion)
 # ---------------------------------------------------------------------------
 
-_jobs: dict[str, dict] = {}  # job_id -> {"step", "current", "total", "phase"}
+_jobs: dict[str, dict] = {}  # job_id -> progress + control state
 _jobs_lock = threading.Lock()
+
+
+class JobCancelledError(Exception):
+    """Raised inside a synthesis loop when the user cancels the job."""
+
+
+def _make_on_progress(job_id: str | None, phase: str = "synthesizing"):
+    """Return an on_progress(current, total) callback that:
+    - raises JobCancelledError if the job was cancelled
+    - blocks until resumed if the job is paused
+    - reports progress to the jobs tracker
+    """
+    def _cb(current: int, total: int) -> None:
+        if _check_cancelled(job_id):
+            raise JobCancelledError(f"Job {job_id} cancelled")
+        _wait_if_paused(job_id)
+        _report_progress(job_id, current, total, phase=phase)
+    return _cb
 
 
 def _report_progress(job_id: str | None, current: int, total: int, phase: str = "synth"):
@@ -113,11 +132,11 @@ def _report_progress(job_id: str | None, current: int, total: int, phase: str = 
     if not job_id:
         return
     with _jobs_lock:
-        _jobs[job_id] = {
-            "phase": phase,
-            "current": current,
-            "total": total,
-        }
+        if job_id not in _jobs:
+            e = threading.Event()
+            e.set()  # running by default
+            _jobs[job_id] = {"cancel_requested": False, "pause_event": e}
+        _jobs[job_id].update({"phase": phase, "current": current, "total": total})
 
 
 def _clear_job(job_id: str | None):
@@ -126,6 +145,51 @@ def _clear_job(job_id: str | None):
         return
     with _jobs_lock:
         _jobs.pop(job_id, None)
+
+
+def _request_cancel(job_id: str) -> None:
+    """Request cancellation of a running job."""
+    with _jobs_lock:
+        if job_id in _jobs:
+            _jobs[job_id]["cancel_requested"] = True
+            _jobs[job_id]["pause_event"].set()  # wake paused jobs so they notice cancel
+
+
+def _request_pause(job_id: str) -> None:
+    """Pause a running job between chapters."""
+    with _jobs_lock:
+        if job_id in _jobs:
+            _jobs[job_id]["pause_event"].clear()
+
+
+def _request_resume(job_id: str) -> None:
+    """Resume a paused job."""
+    with _jobs_lock:
+        if job_id in _jobs:
+            _jobs[job_id]["pause_event"].set()
+
+
+def _check_cancelled(job_id: str | None) -> bool:
+    """Return True if the job has been cancelled."""
+    if not job_id:
+        return False
+    with _jobs_lock:
+        info = _jobs.get(job_id)
+        return bool(info and info.get("cancel_requested"))
+
+
+def _wait_if_paused(job_id: str | None) -> None:
+    """Block until the job is resumed (or cancelled)."""
+    if not job_id:
+        return
+    while True:
+        with _jobs_lock:
+            info = _jobs.get(job_id)
+            if info is None or info.get("cancel_requested"):
+                return
+            event = info["pause_event"]
+        if event.wait(timeout=0.5):
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +278,7 @@ def _get_kokoro_pipeline(lang_code: str):
             log.info("Loading Kokoro TTS pipeline for lang=%s", lang_code)
             _kokoro_pipelines[lang_code] = KPipeline(lang_code=lang_code)
         except ImportError:
-            log.error("Kokoro not installed. Install with: pip install kokoro")
+            log.error("Kokoro not installed. Install with: uv sync --dev")
             raise
     return _kokoro_pipelines[lang_code]
 
@@ -231,7 +295,7 @@ def _get_supertonic_tts():
             log.info("Loading Supertonic TTS (may download ~305MB model on first run)")
             _supertonic_tts = TTS(auto_download=True)
         except ImportError:
-            log.error("Supertonic not installed. Install with: pip install supertonic")
+            log.error("Supertonic not installed. Install with: uv sync --extra supertonic")
             raise
     return _supertonic_tts
 
@@ -239,6 +303,18 @@ def _get_supertonic_tts():
 # ---------------------------------------------------------------------------
 # Text preprocessing — makes TTS output sound like an audiobook
 # ---------------------------------------------------------------------------
+
+_easyocr_reader = None
+
+
+def _get_easyocr():
+    """Lazy-load EasyOCR reader (only for scanned PDFs)."""
+    global _easyocr_reader
+    if _easyocr_reader is None:
+        import easyocr
+        log.info("Loading EasyOCR (first scanned page)")
+        _easyocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+    return _easyocr_reader
 
 
 def _join_wrapped_lines(text: str) -> str:
@@ -405,9 +481,10 @@ def _remove_artifacts(text: str) -> str:
 # PDF running-header / footer stripping
 # ---------------------------------------------------------------------------
 
-def _build_pdf_header_patterns(reader) -> dict:
+def _build_pdf_header_patterns(doc) -> dict:
     """Scan a PDF to detect running headers via frequency analysis.
 
+    Accepts a fitz Document object.
     Returns a dict with:
       - header_lines: set of exact first-line strings (Strategy 1: exact match)
       - header_prefix: common prefix string (Strategy 2: shared prefix)
@@ -418,7 +495,7 @@ def _build_pdf_header_patterns(reader) -> dict:
     from collections import Counter
     import os
 
-    total_pages = len(reader.pages)
+    total_pages = len(doc)
     if total_pages < 4:
         return {}
 
@@ -426,7 +503,7 @@ def _build_pdf_header_patterns(reader) -> dict:
     second_line_counter: Counter[str] = Counter()
 
     for pg in range(total_pages):
-        text = reader.pages[pg].extract_text() or ""
+        text = doc.load_page(pg).get_text() or ""
         lines = text.split("\n")
         if not lines:
             first_lines.append("")
@@ -539,6 +616,7 @@ def preprocess_text_for_speech(text: str) -> str:
     """Clean up extracted text for more natural TTS output.
 
     Pipeline:
+    0. NFKC Unicode normalization
     1. Join hard-wrapped lines (document line breaks)
     2. Expand abbreviations (Mr. → Mister)
     3. Convert numbers (45% → forty-five percent)
@@ -546,6 +624,9 @@ def preprocess_text_for_speech(text: str) -> str:
     5. Remove artifacts (citations, URLs, page numbers)
     6. Add sentence-ending punctuation & pause markers
     """
+    # Step 0: NFKC normalization (resolves ligatures, full-width chars, etc.)
+    text = unicodedata.normalize('NFKC', text)
+
     # Step 1: Join wrapped lines
     text = _join_wrapped_lines(text)
     
@@ -637,18 +718,59 @@ def parse_page_range(range_str: str, total_pages: int) -> list[int]:
     return list(range(start - 1, end))  # convert to 0-based
 
 
+def _is_scanned_page(page) -> bool:
+    """Return True if a fitz page appears to be a scanned image (no selectable text)."""
+    return len(page.get_text().strip()) < 50 and len(page.get_images()) > 0
+
+
+def _ocr_page(page, dpi: int = 300) -> str:
+    """Run EasyOCR on a fitz page and return joined text."""
+    import numpy as np
+    pix = page.get_pixmap(dpi=dpi)
+    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+    if pix.n == 4:  # RGBA → RGB
+        img = img[:, :, :3]
+    results = _get_easyocr().readtext(img, detail=0)
+    return "\n".join(results)
+
+
+def _extract_page_text_fitz(page, header_threshold: int = 50, footer_threshold: int = 50) -> str:
+    """Extract text from a fitz page, filtering header/footer zones by y-coordinate.
+
+    Blocks whose bottom edge (y1) is above *header_threshold* pixels from the top,
+    or whose top edge (y0) is more than *page_height - footer_threshold* pixels down,
+    are discarded.  Falls back to OCR for scanned pages.
+    """
+    ph = page.rect.height
+    lines: list[str] = []
+    for block in page.get_text("blocks"):
+        # block = (x0, y0, x1, y1, text, block_no, block_type)
+        x0, y0, x1, y1, text, *_ = block
+        if y1 < header_threshold or y0 > ph - footer_threshold:
+            continue
+        stripped = text.strip()
+        if stripped:
+            lines.append(stripped)
+    result = "\n".join(lines)
+    # OCR fallback for scanned pages
+    if len(result.strip()) < 50 and _is_scanned_page(page):
+        log.info("Scanned page detected — running OCR")
+        result = _ocr_page(page)
+    return result
+
+
 def extract_text_from_pdf(file_stream, page_range_str: str) -> tuple[str, str]:
     """Extract and preprocess text from selected PDF pages."""
-    reader = PdfReader(file_stream)
-    total = len(reader.pages)
+    doc = fitz.open(stream=file_stream.read(), filetype="pdf")
+    total = len(doc)
     indices = parse_page_range(page_range_str, total)
 
     # Detect running headers across the whole document
-    header_patterns = _build_pdf_header_patterns(reader)
+    header_patterns = _build_pdf_header_patterns(doc)
 
     parts: list[str] = []
     for i in indices:
-        text = reader.pages[i].extract_text() or ""
+        text = _extract_page_text_fitz(doc.load_page(i))
         text = _strip_page_headers(text, header_patterns)
         parts.append(text)
 
@@ -1124,11 +1246,19 @@ def synthesize_kokoro(text: str, voice: str, speed: float, lang_code: str, on_pr
     
     for i, chunk in enumerate(chunks):
         try:
-            # KPipeline.__call__ is a generator yielding Result objects
-            chunk_samples = []
-            for result in pipe(chunk, voice=voice, speed=speed):
-                if result.audio is not None:
-                    chunk_samples.append(result.audio.cpu().numpy())
+            # Kokoro loads voice .pt files from HuggingFace on first use.
+            # Temporarily allow network access even when HF_HUB_OFFLINE=1 so
+            # voice packs can be downloaded and cached the first time.
+            _prev_offline = os.environ.pop("HF_HUB_OFFLINE", None)
+            try:
+                # KPipeline.__call__ is a generator yielding Result objects
+                chunk_samples = []
+                for result in pipe(chunk, voice=voice, speed=speed):
+                    if result.audio is not None:
+                        chunk_samples.append(result.audio.cpu().numpy())
+            finally:
+                if _prev_offline is not None:
+                    os.environ["HF_HUB_OFFLINE"] = _prev_offline
 
             if not chunk_samples:
                 log.warning("  Kokoro chunk %d produced no audio", i + 1)
@@ -1297,7 +1427,7 @@ def _get_xtts_model(model_key: str = "base"):
                 log.info("Loading XTTS model: %s", model_key)
                 _xtts_models[model_key] = CoquiTTS(model_key)
         except ImportError:
-            log.error("Coqui TTS not installed. Install with: pip install TTS>=0.22.0")
+            log.error("Coqui TTS not installed. Install with: uv sync --extra xtts")
             raise
     return _xtts_models[model_key]
 
@@ -1320,7 +1450,7 @@ def _get_xtts_ro_model():
             model.load_checkpoint(config, checkpoint_dir=model_dir, use_deepspeed=False)
             _xtts_models[key] = model
         except ImportError:
-            log.error("Coqui TTS not installed. Install with: pip install TTS>=0.22.0")
+            log.error("Coqui TTS not installed. Install with: uv sync --extra xtts")
             raise
     return _xtts_models[key]
 
@@ -1963,30 +2093,21 @@ def api_pdf_info():
             file_stream.close()
 
 
-def _detect_pdf_chapters(reader) -> list[dict]:
+def _detect_pdf_chapters(doc) -> list[dict]:
     """Detect chapters in a PDF using multiple strategies.
 
+    Accepts a fitz Document object.
     Returns a list of dicts: [{"title": str, "page": int (1-based), "depth": int}, ...]
     """
     chapters: list[dict] = []
 
-    # 1) Try PDF outline (bookmarks)
-    if reader.outline:
-        def _walk_outline(items, depth=0):
-            for item in items:
-                if isinstance(item, list):
-                    _walk_outline(item, depth + 1)
-                else:
-                    try:
-                        pn = reader.get_destination_page_number(item)
-                        chapters.append({
-                            "title": item.title,
-                            "page": pn + 1,
-                            "depth": depth,
-                        })
-                    except Exception:
-                        pass
-        _walk_outline(reader.outline)
+    # 1) Try PDF outline/bookmarks via fitz get_toc()
+    # Returns [[level, title, page], ...] — flat list, no recursion needed
+    toc = doc.get_toc(simple=True)
+    if toc:
+        for level, title, page in toc:
+            if title and page >= 1:
+                chapters.append({"title": title.strip(), "page": page, "depth": level - 1})
 
     # 2) Detect "Book Title  |  Section Name" page headers
     if not chapters:
@@ -1997,8 +2118,8 @@ def _detect_pdf_chapters(reader) -> list[dict]:
             re.IGNORECASE,
         )
         prev_section = None
-        for i, page in enumerate(reader.pages):
-            txt = (page.extract_text() or "")[:500].strip()
+        for i in range(len(doc)):
+            txt = (doc.load_page(i).get_text() or "")[:500].strip()
             first_line = txt.split("\n")[0].strip() if txt else ""
             m = header_re.match(first_line)
             if m:
@@ -2031,8 +2152,8 @@ def _detect_pdf_chapters(reader) -> list[dict]:
     # 3) Parse a "TABLE OF CONTENTS" page
     if not chapters:
         toc_page_text = None
-        for i, page in enumerate(reader.pages[:20]):
-            txt = (page.extract_text() or "").strip()
+        for i in range(min(20, len(doc))):
+            txt = (doc.load_page(i).get_text() or "").strip()
             if re.search(r'TABLE\s+OF\s+CONTENTS|CONTENTS', txt, re.IGNORECASE):
                 toc_page_text = txt
                 break
@@ -2053,8 +2174,8 @@ def _detect_pdf_chapters(reader) -> list[dict]:
                     entries.append(val)
             for entry in entries:
                 key = entry.split('\n')[0].strip()[:60]
-                for pi, page in enumerate(reader.pages):
-                    txt = (page.extract_text() or "")[:500]
+                for pi in range(len(doc)):
+                    txt = (doc.load_page(pi).get_text() or "")[:500]
                     if key in txt and pi + 1 not in [c["page"] for c in chapters]:
                         chapters.append({"title": entry, "page": pi + 1, "depth": 0})
                         break
@@ -2066,25 +2187,56 @@ def _detect_pdf_chapters(reader) -> list[dict]:
             r'(?:\s+[\dIVXLCivxlc]+)?',
             re.IGNORECASE,
         )
-        for i, page in enumerate(reader.pages):
-            txt = (page.extract_text() or "")[:300].strip()
+        for i in range(len(doc)):
+            txt = (doc.load_page(i).get_text() or "")[:300].strip()
             first_line = txt.split("\n")[0].strip() if txt else ""
             if first_line and chapter_re.match(first_line):
                 chapters.append({"title": first_line, "page": i + 1, "depth": 0})
 
+    # 5) Last-resort heuristic: split on 3+ blank lines within full document text
+    if not chapters:
+        all_text = "\n".join(doc.load_page(i).get_text() or "" for i in range(len(doc)))
+        sections = re.split(r'\n{3,}', all_text)
+        sections = [s.strip() for s in sections if s.strip()]
+        if len(sections) >= 2:
+            for idx, section in enumerate(sections):
+                title_line = section.split("\n")[0].strip()[:80] or f"Section {idx + 1}"
+                chapters.append({"title": title_line, "page": idx + 1, "depth": 0})
+
     return chapters
+
+
+def _remove_chapter_overlap(prev_text: str, curr_text: str, check_lines: int = 20) -> str:
+    """Remove lines duplicated between the end of prev_text and start of curr_text.
+
+    PyMuPDF page ranges can overlap at chapter boundaries. This finds the longest
+    matching tail/head sequence (up to *check_lines*) and strips it from *prev_text*.
+    """
+    prev_lines = prev_text.splitlines()
+    curr_lines = curr_text.splitlines()
+    max_overlap = min(len(prev_lines), len(curr_lines), check_lines)
+    for size in range(max_overlap, 0, -1):
+        if prev_lines[-size:] == curr_lines[:size]:
+            return "\n".join(prev_lines[:-size])
+    return prev_text
 
 
 def _api_pdf_info_impl(file_stream, filename: str):
     """PDF-specific page/chapter info extraction."""
-    reader = PdfReader(file_stream)
-    total = len(reader.pages)
+    doc = fitz.open(stream=file_stream.read(), filetype="pdf")
+    total = len(doc)
     pages = []
-    for i, page in enumerate(reader.pages):
-        txt = (page.extract_text() or "").strip()
-        pages.append({"page": i + 1, "has_text": len(txt) > 20, "chars": len(txt)})
+    for i in range(total):
+        page = doc.load_page(i)
+        txt = (page.get_text() or "").strip()
+        pages.append({
+            "page": i + 1,
+            "has_text": len(txt) > 20,
+            "chars": len(txt),
+            "is_scanned": _is_scanned_page(page),
+        })
 
-    chapters = _detect_pdf_chapters(reader)
+    chapters = _detect_pdf_chapters(doc)
 
     return jsonify({"total_pages": total, "pages": pages, "chapters": chapters})
 
@@ -2109,8 +2261,36 @@ def progress(job_id):
     with _jobs_lock:
         info = _jobs.get(job_id)
     if info is None:
-        return jsonify({"phase": "unknown", "current": 0, "total": 0})
-    return jsonify(info)
+        return jsonify({"phase": "unknown", "current": 0, "total": 0,
+                        "paused": False, "cancelled": False})
+    return jsonify({
+        "phase": info.get("phase", "unknown"),
+        "current": info.get("current", 0),
+        "total": info.get("total", 0),
+        "paused": not info["pause_event"].is_set() if "pause_event" in info else False,
+        "cancelled": bool(info.get("cancel_requested")),
+    })
+
+
+@app.route("/api/job/<job_id>/cancel", methods=["POST"])
+def job_cancel(job_id):
+    """Request cancellation of a running conversion job."""
+    _request_cancel(job_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/job/<job_id>/pause", methods=["POST"])
+def job_pause(job_id):
+    """Pause a running conversion job between chapters."""
+    _request_pause(job_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/job/<job_id>/resume", methods=["POST"])
+def job_resume(job_id):
+    """Resume a paused conversion job."""
+    _request_resume(job_id)
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------
@@ -2257,9 +2437,9 @@ def _do_synthesis(text: str, backend: str, params: dict, on_progress=None) -> di
 
 def _build_pdf_chapter_texts(file_stream) -> list[tuple[str, str]]:
     """Return chapter titles and preprocessed text for a PDF."""
-    reader = PdfReader(file_stream)
-    total_pages = len(reader.pages)
-    chapters = _detect_pdf_chapters(reader)
+    doc = fitz.open(stream=file_stream.read(), filetype="pdf")
+    total_pages = len(doc)
+    chapters = _detect_pdf_chapters(doc)
 
     if not chapters:
         raise ValueError(
@@ -2276,14 +2456,21 @@ def _build_pdf_chapter_texts(file_stream) -> list[tuple[str, str]]:
         end = chapters[idx + 1]["page"] - 2 if idx < len(chapters) - 1 else total_pages - 1
         segments.append((ch["title"], start, end))
 
-    header_patterns = _build_pdf_header_patterns(reader)
+    header_patterns = _build_pdf_header_patterns(doc)
     chapter_texts: list[tuple[str, str]] = []
     for title, start_pg, end_pg in segments:
         parts = []
         for pi in range(start_pg, end_pg + 1):
-            page_text = reader.pages[pi].extract_text() or ""
+            page_text = _extract_page_text_fitz(doc.load_page(pi))
             parts.append(_strip_page_headers(page_text, header_patterns))
         chapter_texts.append((title, preprocess_text_for_speech("\n".join(parts))))
+
+    # Remove text duplicated between adjacent chapter boundaries
+    for i in range(len(chapter_texts) - 1):
+        title_a, text_a = chapter_texts[i]
+        _, text_b = chapter_texts[i + 1]
+        chapter_texts[i] = (title_a, _remove_chapter_overlap(text_a, text_b))
+
     return chapter_texts
 
 
@@ -2356,6 +2543,13 @@ def _convert_chapters(file_stream, source_filename, input_file_name,
 
     try:
         for seg_idx, (title, text) in enumerate(chapter_texts):
+            # Check for cancellation before each chapter
+            if _check_cancelled(job_id):
+                log.info("Chapter conversion cancelled at segment %d", seg_idx)
+                break
+            # Block here if the job has been paused
+            _wait_if_paused(job_id)
+
             _report_progress(job_id, seg_idx, len(chapter_texts),
                              phase="synthesizing")
 
@@ -2422,6 +2616,59 @@ def _convert_chapters(file_stream, source_filename, input_file_name,
     finally:
         if tmp_obj is not None:
             tmp_obj.cleanup()
+
+
+@app.route("/api/voice-test", methods=["POST"])
+def voice_test():
+    """Synthesize a short preview for voice testing.
+
+    Accepts form fields: backend, voice, text (max 500 chars).
+    Rate-limited to one request per 3 seconds per session.
+    Returns an MP3 audio response.
+    """
+    import time as _time
+
+    backend = request.form.get("backend", "").strip()
+    voice = request.form.get("voice", "").strip()
+    text = request.form.get("text", "").strip()
+
+    if not text:
+        return _err("Please provide text to synthesize.", 400)
+    if len(text) > 500:
+        return _err("Preview text must be 500 characters or fewer.", 400)
+
+    ALLOWED_BACKENDS = {
+        "polly", "piper", "huggingface", "kokoro", "supertonic",
+        "xtts", "xtts_ro", "speecht5", "hf_cloud",
+    }
+    if backend not in ALLOWED_BACKENDS:
+        return _err(f"Unknown backend: '{backend}'", 400)
+
+    # Rate limiting: max 1 request per 3 seconds (server-side per session)
+    from flask import session
+    now = _time.time()
+    last = session.get("last_voice_test", 0)
+    if now - last < 3.0:
+        remaining = round(3.0 - (now - last), 1)
+        return _err(f"Please wait {remaining}s before generating another preview.", 429)
+    session["last_voice_test"] = now
+
+    try:
+        synth_params = _collect_synth_params(backend, voice)
+    except ValueError as e:
+        return _err(str(e), 400)
+
+    try:
+        result = _do_synthesis(text, backend, synth_params)
+    except ValueError as e:
+        return _err(str(e), 400)
+    except Exception as e:
+        log.exception("Voice test synthesis failed")
+        return _err(f"Synthesis error: {e}", 500)
+
+    mp3_buf = result["mp3_buf"]
+    mp3_buf.seek(0)
+    return send_file(mp3_buf, mimetype="audio/mpeg")
 
 
 @app.route("/convert", methods=["POST"])
@@ -2515,9 +2762,13 @@ def convert():
 
     # --- Synthesize ---
     _report_progress(job_id, 0, 1, phase="synthesizing")
-    on_prog = lambda cur, tot: _report_progress(job_id, cur, tot, phase="synthesizing")
+    on_prog = _make_on_progress(job_id)
     try:
         result = _do_synthesis(text, backend, synth_params, on_prog)
+    except JobCancelledError:
+        log.info("Single-file conversion cancelled (job %s)", job_id)
+        _clear_job(job_id)
+        return _err("Conversion was cancelled.", 400)
     except ValueError as e:
         _clear_job(job_id)
         return _err(str(e))
@@ -2565,5 +2816,9 @@ def convert():
 # Entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+def main() -> None:
     app.run(host="0.0.0.0", port=1234, debug=True)
+
+
+if __name__ == "__main__":
+    main()

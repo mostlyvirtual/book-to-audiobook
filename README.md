@@ -1,4 +1,4 @@
-# Audiobook Studio
+# Book to Audiobook Converter
 
 Turn PDFs and EPUBs into spoken audio from a single local web app. Pick a page range, choose a TTS engine, preview what is available, and export either one MP3 or a ZIP of chapter files.
 
@@ -47,22 +47,66 @@ Most TTS tools make you choose between flexibility and convenience. This app kee
 
 ## Quick Start
 
-### 1. Create a virtual environment
+The shortest clean setup is two commands:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+./scripts/bootstrap.sh
+uv run book-to-audiobook
 ```
 
-### 2. Install Python dependencies
+Then open `http://localhost:1234`.
+
+If you want every optional backend as well:
 
 ```bash
-pip install -r requirements.txt
+./scripts/bootstrap.sh --all
+uv run book-to-audiobook
 ```
+
+### What the bootstrap script does
+
+`./scripts/bootstrap.sh`:
+- installs `uv` if missing
+- installs `ffmpeg` and `espeak-ng`
+- installs Python 3.12 via `uv`
+- runs `uv sync --dev`
+- creates `.env` from `.env.example` if needed
+
+It currently supports:
+- macOS with Homebrew
+- Ubuntu / Debian style systems with `apt-get`
+
+### Manual setup
+
+If you prefer not to use the bootstrap script, the equivalent manual flow is below.
+
+### 1. Install `uv`
+
+macOS or Ubuntu:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+If you already use Homebrew on macOS:
+
+```bash
+brew install uv
+```
+
+### 2. Pin the project Python version
+
+This repo is set up for Python 3.12 because several TTS backends are still fragile on newer interpreters.
+
+```bash
+uv python install 3.12
+```
+
+The repo includes [`.python-version`](./.python-version), so `uv` will use Python 3.12 automatically.
 
 ### 3. Install non-Python system dependencies
 
-This project needs a couple of tools that are not installed by `pip`.
+This project needs a couple of tools that are outside Python dependency management.
 
 | Tool | Required? | Why |
 | --- | --- | --- |
@@ -104,7 +148,40 @@ ffmpeg -version
 espeak-ng --version
 ```
 
-### 4. Create your local environment file
+### 4. Sync Python dependencies with `uv`
+
+For the default app experience, including the web app, Kokoro, Polly support, and the fast test suite:
+
+```bash
+uv sync --dev
+```
+
+If you want every optional backend available locally:
+
+```bash
+uv sync --dev --extra all
+```
+
+### Optional backend extras
+
+| Extra | Adds |
+| --- | --- |
+| `piper` | Piper Python backend support |
+| `supertonic` | Supertonic local ONNX backend |
+| `huggingface` | Local Transformers TTS backend |
+| `xtts` | XTTS / XTTS-RO voice cloning backends |
+| `speecht5` | SpeechT5 multi-speaker backend |
+| `ocr` | EasyOCR fallback for scanned PDFs |
+| `all` | All optional backends above |
+
+Examples:
+
+```bash
+uv sync --dev --extra piper --extra supertonic
+uv sync --dev --extra xtts --extra ocr
+```
+
+### 5. Create your local environment file
 
 ```bash
 cp .env.example .env
@@ -115,10 +192,10 @@ You do not need to fill everything in up front. For a first successful run, the 
 - keep Kokoro defaults as-is
 - skip cloud credentials until you want Polly or HF cloud
 
-### 5. Start the app
+### 6. Start the app
 
 ```bash
-python app.py
+uv run book-to-audiobook
 ```
 
 Open:
@@ -127,13 +204,26 @@ Open:
 http://localhost:1234
 ```
 
-### 6. First successful conversion
+### 7. First successful conversion
 
 1. Open the **Convert** page.
 2. Upload a PDF or EPUB, or place one inside `input/` and pick it from the dropdown.
 3. Keep **Kokoro** selected for the simplest local path.
 4. Leave page range as `all` or choose a range such as `1-10`.
 5. Click **Convert to MP3**.
+
+## Common `uv` Commands
+
+```bash
+./scripts/bootstrap.sh
+./scripts/bootstrap.sh --all
+uv sync --dev
+uv sync --dev --extra all
+uv lock
+uv sync --frozen --dev
+uv run book-to-audiobook
+uv run pytest tests/test_smoke.py -q
+```
 
 ## Configuration
 
@@ -237,26 +327,33 @@ Generated filenames include:
 ```text
 .
 ├── app.py
+├── pyproject.toml
+├── .python-version
+├── scripts/
+│   └── bootstrap.sh
 ├── templates/
 │   └── index.html
 ├── input/
 ├── output/
 ├── reference_audio/
 ├── tests/
-│   └── test_smoke.py
 ├── models/
 ├── .env.example
-└── requirements.txt
+└── uv.lock
 ```
 
 What each piece does:
 - `app.py`: the full Flask app, document extraction pipeline, backend dispatch, and routes
+- `pyproject.toml`: dependency definitions, optional backend extras, and pytest config for `uv`
+- `.python-version`: pins the interpreter version used by `uv`
+- `scripts/bootstrap.sh`: one-command local setup for supported macOS and Ubuntu/Debian environments
 - `templates/index.html`: the UI, styling, and browser-side JavaScript in one template
 - `input/`: books you want selectable from the dropdown
 - `output/`: saved MP3s and chapter ZIP directories
 - `reference_audio/`: uploaded voice-cloning samples
 - `models/`: Piper `.onnx` models and their `.json` sidecars
-- `tests/test_smoke.py`: fast regression coverage for critical behaviors
+- `tests/`: fast regression coverage plus focused route and extraction tests
+- `uv.lock`: fully resolved dependency lockfile generated by `uv`
 
 ## Architecture At A Glance
 
@@ -273,7 +370,7 @@ The app is intentionally simple:
   - progress is polled from `/progress/<job_id>`
 
 - **Document processing**
-  - PDFs are read with `pypdf`
+  - PDFs are read with `PyMuPDF` / `fitz`
   - EPUBs are parsed from the content spine
   - extracted text is cleaned before TTS
 
@@ -316,7 +413,7 @@ This is a practical cleanup layer, not a perfect document normalizer.
 Run the fast regression suite:
 
 ```bash
-pytest tests/test_smoke.py -q
+uv run pytest tests/test_smoke.py -q
 ```
 
 The current tests focus on:
@@ -344,7 +441,7 @@ Check:
 ### Piper works inconsistently or fallback errors mention the CLI
 
 Check:
-- the Python package `piper-tts` is installed from `requirements.txt`
+- `uv sync --extra piper` has been run if you want the Python Piper backend
 - if the app falls back to the CLI, `piper` is installed and available on `PATH`
 - your shell can run `piper --help`
 
@@ -439,3 +536,11 @@ Keep:
 - any other private values
 
 only in local, untracked environment files.
+
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0.
+
+That means if you modify it and make the modified version available to users over a network, you must also make the corresponding source available under the same license.
+
+See [`LICENSE`](./LICENSE) for the full text.
