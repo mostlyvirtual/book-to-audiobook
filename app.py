@@ -407,6 +407,7 @@ def _get_easyocr():
     """Lazy-load EasyOCR reader (only for scanned PDFs)."""
     global _easyocr_reader
     if _easyocr_reader is None:
+        _auto_install_extra("easyocr", "ocr")
         import easyocr
         log.info("Loading EasyOCR (first scanned page)")
         _easyocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
