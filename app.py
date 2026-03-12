@@ -252,8 +252,11 @@ def _get_piper_voice(model_path: str):
     """Load PiperVoice once and cache it."""
     global _piper_voice
     if _piper_voice is None or _piper_voice._model_path != model_path:
-        from piper import PiperVoice
-
+        try:
+            from piper import PiperVoice
+        except ImportError:
+            log.error("Piper not installed. Install with: uv sync --extra piper")
+            raise
         log.info("Loading Piper model: %s", model_path)
         _piper_voice = PiperVoice.load(model_path)
         _piper_voice._model_path = model_path  # tag for cache check
@@ -264,8 +267,11 @@ def _get_hf_pipeline(model_name: str):
     """Load HF TTS pipeline once per model and cache it."""
     global _hf_pipelines
     if model_name not in _hf_pipelines:
-        from transformers import pipeline as hf_pipeline
-
+        try:
+            from transformers import pipeline as hf_pipeline
+        except ImportError:
+            log.error("Transformers not installed. Install with: uv sync --extra huggingface")
+            raise
         _report_downloading(f"HuggingFace TTS: {model_name}")
         log.info("Loading HF TTS model: %s", model_name)
         _hf_pipelines[model_name] = hf_pipeline("text-to-speech", model=model_name)
@@ -1616,9 +1622,13 @@ def _get_speecht5():
     """Load SpeechT5 processor, model, vocoder, and speaker embeddings."""
     global _speecht5_cache
     if "model" not in _speecht5_cache:
-        from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
-        from datasets import load_dataset
-        import torch
+        try:
+            from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
+            from datasets import load_dataset
+            import torch
+        except ImportError:
+            log.error("SpeechT5 deps not installed. Install with: uv sync --extra speecht5")
+            raise
 
         _report_downloading("SpeechT5 (microsoft/speecht5_tts)")
         log.info("Loading SpeechT5 model + vocoder + speaker embeddings")
@@ -2011,6 +2021,26 @@ def api_polly_voices():
         return jsonify({"error": str(e), "voices": []})
 
 
+# Supertonic voice catalogue — static so the voices endpoint works without
+# importing supertonic. Matches the voice_style_names the library exposes.
+SUPERTONIC_VOICES: dict[str, list[dict]] = {
+    "Female": [
+        {"id": "F1", "name": "Female 1"},
+        {"id": "F2", "name": "Female 2"},
+        {"id": "F3", "name": "Female 3"},
+        {"id": "F4", "name": "Female 4"},
+        {"id": "F5", "name": "Female 5"},
+    ],
+    "Male": [
+        {"id": "M1", "name": "Male 1"},
+        {"id": "M2", "name": "Male 2"},
+        {"id": "M3", "name": "Male 3"},
+        {"id": "M4", "name": "Male 4"},
+        {"id": "M5", "name": "Male 5"},
+    ],
+}
+
+
 # Kokoro voice catalogue — single source of truth used by both the API
 # endpoint and the index route (to pre-render the review card label).
 KOKORO_VOICES: dict[str, list[dict]] = {
@@ -2059,19 +2089,8 @@ def api_kokoro_voices():
 
 @app.route("/api/supertonic-voices")
 def api_supertonic_voices():
-    """Return available Supertonic voices (lazy-loads model on first call).
-    
-    Supertonic includes voices in multiple languages and styles.
-    """
-    try:
-        tts = _get_supertonic_tts()
-        # Supertonic exposes named voice styles (e.g., F1..F5, M1..M5).
-        styles = list(getattr(tts, "voice_style_names", []) or [])
-        by_lang = {"en": [{"id": s, "name": s} for s in styles]}
-        return jsonify({"voices": by_lang})
-    except Exception as e:
-        log.warning("Failed to fetch Supertonic voices: %s", e)
-        return jsonify({"error": str(e), "voices": {}})
+    """Return available Supertonic voices (static catalogue, no model load)."""
+    return jsonify({"voices": SUPERTONIC_VOICES})
 
 
 @app.route("/api/pdf-info", methods=["POST"])
