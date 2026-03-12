@@ -5,6 +5,13 @@ __pycache__/
 *.mp3
 .env
 
+# Model caches (downloaded on first run)
+.cache/
+
+# Reference audio for voice cloning
+reference_audio/*
+!reference_audio/.gitkeep
+
 # Model files (large binaries)
 models/*.onnx
 models/*.onnx.json

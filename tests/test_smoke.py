@@ -1,4 +1,4 @@
-"""Smoke tests for pdf-to-audiobook.
+"""Smoke tests for book-to-audiobook.
 
 Validates that all TTS backends load, models initialise, and API
 endpoints respond correctly.  These are the same checks that were
@@ -135,6 +135,14 @@ class TestAPIEndpoints:
         voices = data["voices"]
         assert len(voices) >= 1, "Expected at least 1 language group"
 
+    def test_backend_status_endpoint(self, client):
+        resp = client.get("/api/backend-status")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        for backend in ("piper", "kokoro", "supertonic", "huggingface", "polly", "xtts", "xtts_ro", "hf_cloud", "speecht5"):
+            assert backend in data, f"Missing backend: {backend}"
+        assert data["polly"]["ready"] is True
+
     def test_input_files_endpoint(self, client):
         resp = client.get("/api/input-files")
         assert resp.status_code == 200
@@ -146,6 +154,36 @@ class TestAPIEndpoints:
         resp = client.get("/")
         assert resp.status_code == 200
         assert b"<!DOCTYPE html>" in resp.data or b"<html" in resp.data
+
+    def test_languages_endpoint(self, client):
+        resp = client.get("/api/languages")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "en" in data
+        assert "ro" in data
+        assert "English" in data["en"]["name"]
+        assert "backends" in data["en"]
+
+    def test_reference_voices_endpoint(self, client):
+        resp = client.get("/api/reference-voices")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "voices" in data
+        assert isinstance(data["voices"], list)
+
+    def test_hf_speakers_endpoint(self, client):
+        resp = client.get("/api/hf-speakers")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "speakers" in data
+        assert len(data["speakers"]) >= 1
+        for s in data["speakers"]:
+            assert "id" in s
+            assert "name" in s
+
+    def test_upload_reference_rejects_no_file(self, client):
+        resp = client.post("/api/upload-reference")
+        assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -220,3 +258,35 @@ class TestTextPreprocessing:
         assert _slug_token("Hello World!") == "Hello-World"
         assert _slug_token("") == "na"
         assert _slug_token("a" * 100, max_len=10) == "a" * 10
+
+
+# ---------------------------------------------------------------------------
+# 7. Romanian diacritic normalization
+# ---------------------------------------------------------------------------
+
+class TestRomanianNormalization:
+    def test_cedilla_to_comma(self):
+        from app import _normalize_romanian
+        assert _normalize_romanian("ş") == "ș"
+        assert _normalize_romanian("ţ") == "ț"
+        assert _normalize_romanian("Ş") == "Ș"
+        assert _normalize_romanian("Ţ") == "Ț"
+
+    def test_already_correct(self):
+        from app import _normalize_romanian
+        text = "București, județul Iași"
+        assert _normalize_romanian(text) == text
+
+    def test_mixed_diacritics(self):
+        from app import _normalize_romanian
+        assert _normalize_romanian("şcoală şi ţară") == "școală și țară"
+
+
+# ---------------------------------------------------------------------------
+# 8. HF pipeline cache — dict-keyed
+# ---------------------------------------------------------------------------
+
+class TestHFPipelineCache:
+    def test_hf_pipelines_is_dict(self):
+        from app import _hf_pipelines
+        assert isinstance(_hf_pipelines, dict)

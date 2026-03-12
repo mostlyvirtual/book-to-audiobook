@@ -1,7 +1,7 @@
 """
-PDF-to-Audiobook Flask App
-==========================
-Upload a PDF, pick pages and a TTS backend, download an MP3.
+Book-to-Audiobook Flask App
+============================
+Upload a PDF or EPUB, pick pages and a TTS backend, download an MP3.
 
 Backends:
   - polly   : Amazon Polly (requires AWS credentials)
@@ -16,15 +16,27 @@ import json
 import os
 import re
 import time
+import uuid
 import wave
 import logging
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()  # load .env before anything reads os.getenv
+
+# ---------------------------------------------------------------------------
+# Force all model caches into a project-local .cache/ directory
+# Must run BEFORE importing any HF / Supertonic libraries.
+# ---------------------------------------------------------------------------
+_PROJECT_ROOT = Path(__file__).parent
+_PROJECT_CACHE = _PROJECT_ROOT / ".cache"
+_PROJECT_CACHE.mkdir(exist_ok=True)
+os.environ.setdefault("HF_HOME", str(_PROJECT_CACHE / "huggingface"))
+os.environ.setdefault("SUPERTONIC_CACHE_DIR", str(_PROJECT_CACHE / "supertonic"))
 
 from flask import (
     Flask,
@@ -89,13 +101,43 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Job progress tracking (polled by frontend during conversion)
+# ---------------------------------------------------------------------------
+
+_jobs: dict[str, dict] = {}  # job_id -> {"step", "current", "total", "phase"}
+_jobs_lock = threading.Lock()
+
+
+def _report_progress(job_id: str | None, current: int, total: int, phase: str = "synth"):
+    """Update progress for a running job (thread-safe)."""
+    if not job_id:
+        return
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "phase": phase,
+            "current": current,
+            "total": total,
+        }
+
+
+def _clear_job(job_id: str | None):
+    """Remove a finished job from the tracker."""
+    if not job_id:
+        return
+    with _jobs_lock:
+        _jobs.pop(job_id, None)
+
+
+# ---------------------------------------------------------------------------
 # Lazy-loaded singletons (heavy models loaded once)
 # ---------------------------------------------------------------------------
 
 _piper_voice = None
-_hf_pipeline = None
+_hf_pipelines: dict[str, object] = {}
 _kokoro_pipelines: dict[str, object] = {}
 _supertonic_tts = None
+_xtts_models: dict[str, object] = {}
+_speecht5_cache: dict[str, object] = {}
 
 
 def _validate_piper_model_files(model_path: str) -> str:
@@ -141,14 +183,14 @@ def _get_piper_voice(model_path: str):
 
 
 def _get_hf_pipeline(model_name: str):
-    """Load HF TTS pipeline once and cache it."""
-    global _hf_pipeline
-    if _hf_pipeline is None:
+    """Load HF TTS pipeline once per model and cache it."""
+    global _hf_pipelines
+    if model_name not in _hf_pipelines:
         from transformers import pipeline as hf_pipeline
 
         log.info("Loading HF TTS model: %s", model_name)
-        _hf_pipeline = hf_pipeline("text-to-speech", model=model_name)
-    return _hf_pipeline
+        _hf_pipelines[model_name] = hf_pipeline("text-to-speech", model=model_name)
+    return _hf_pipelines[model_name]
 
 
 def _get_kokoro_pipeline(lang_code: str):
@@ -196,7 +238,7 @@ def _get_supertonic_tts():
 def _join_wrapped_lines(text: str) -> str:
     """Join lines where current ends without punctuation and next starts lowercase.
     
-    Fixes PDF hard-wraps like:
+    Fixes document hard-wraps like:
       "This is impor-
        tant information" → "This is important information"
     """
@@ -330,7 +372,7 @@ def _convert_numbers(text: str) -> str:
 
 
 def _remove_artifacts(text: str) -> str:
-    """Remove PDF extraction artifacts: citations, page numbers, URLs.
+    """Remove extraction artifacts: citations, page numbers, URLs.
     
     Strips: [1], [Ref], page numbers, URLs, and common metadata junk.
     """
@@ -350,10 +392,10 @@ def _remove_artifacts(text: str) -> str:
 
 
 def preprocess_text_for_speech(text: str) -> str:
-    """Clean up PDF-extracted text for more natural TTS output.
+    """Clean up extracted text for more natural TTS output.
 
     Pipeline:
-    1. Join hard-wrapped lines (PDF line breaks)
+    1. Join hard-wrapped lines (document line breaks)
     2. Expand abbreviations (Mr. → Mister)
     3. Convert numbers (45% → forty-five percent)
     4. Normalize ligatures, whitespace, punctuation
@@ -372,7 +414,7 @@ def preprocess_text_for_speech(text: str) -> str:
     # Collapse multiple spaces/tabs into one
     text = re.sub(r"[ \t]+", " ", text)
 
-    # Normalize common PDF extraction artifacts (ligatures)
+    # Normalize common extraction artifacts (ligatures)
     text = text.replace("\ufb01", "fi")
     text = text.replace("\ufb02", "fl")
     text = text.replace("\ufb00", "ff")
@@ -400,7 +442,7 @@ def preprocess_text_for_speech(text: str) -> str:
     # Paragraph breaks -> period + newline (ensures TTS sees sentence boundary)
     text = re.sub(r"\n\n+", ".\n\n", text)
 
-    # Single newlines mid-paragraph -> space (PDF line wrapping)
+    # Single newlines mid-paragraph -> space (document line wrapping)
     text = re.sub(r"(?<=[a-z,;])\n(?=[a-z])", " ", text)
 
     # Clean up doubled periods from above transforms
@@ -419,7 +461,7 @@ def preprocess_text_for_speech(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# PDF helpers
+# Document helpers (PDF + EPUB)
 # ---------------------------------------------------------------------------
 
 
@@ -584,7 +626,7 @@ def _slug_token(value: str, max_len: int = 50) -> str:
 
 
 def build_output_filename(
-    pdf_filename: str,
+    source_filename: str,
     page_label: str,
     backend: str,
     provider_detail: str,
@@ -595,7 +637,7 @@ def build_output_filename(
     <ISO-UTC>_<book>_<pages>_<backend>_<voice-or-model>[_prosody].mp3
     """
     iso_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    book = _slug_token(Path(pdf_filename).stem, max_len=60)
+    book = _slug_token(Path(source_filename).stem, max_len=60)
     pages = _slug_token(page_label, max_len=24)
     backend_token = _slug_token(backend, max_len=16)
     detail = _slug_token(provider_detail, max_len=80)
@@ -645,7 +687,7 @@ _POLLY_RATES = {
 }
 
 
-def synthesize_polly(text: str, voice_id: str, engine: str) -> tuple[io.BytesIO, int]:
+def synthesize_polly(text: str, voice_id: str, engine: str, on_progress=None) -> tuple[io.BytesIO, int]:
     """Synthesize text → MP3 via Amazon Polly with SSML pauses.
 
     Returns (mp3_buffer, total_chars_billed) where total_chars_billed is the
@@ -684,6 +726,8 @@ def synthesize_polly(text: str, voice_id: str, engine: str) -> tuple[io.BytesIO,
         segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
         combined += segment
         log.info("  chunk %d/%d done (%d chars billed)", i + 1, len(chunks), chars_this_chunk)
+        if on_progress:
+            on_progress(i + 1, len(chunks))
 
     buf = io.BytesIO()
     combined.export(buf, format="mp3", bitrate="128k")
@@ -701,6 +745,7 @@ def synthesize_piper(
     noise_scale: float | None = None,
     noise_w_scale: float | None = None,
     sentence_silence: float | None = None,
+    on_progress=None,
 ) -> io.BytesIO:
     """Synthesize text → MP3 via Piper TTS with prosody controls.
 
@@ -744,6 +789,8 @@ def synthesize_piper(
                 if i > 0 and ss > 0:
                     wf.writeframes(silence_bytes)
                 wf.writeframes(audio_chunk.audio_int16_bytes)
+                if on_progress:
+                    on_progress(i + 1, i + 1)  # total unknown, keep current == total
 
     except Exception as e:
         log.warning("Piper Python API failed (%s), falling back to CLI", e)
@@ -797,7 +844,7 @@ def _synthesize_piper_cli(
         Path(tmp_path).unlink(missing_ok=True)
 
 
-def synthesize_huggingface(text: str, model_name: str) -> io.BytesIO:
+def synthesize_huggingface(text: str, model_name: str, on_progress=None) -> io.BytesIO:
     """Synthesize text → MP3 via a HuggingFace TTS pipeline."""
     import numpy as np
 
@@ -828,6 +875,8 @@ def synthesize_huggingface(text: str, model_name: str) -> io.BytesIO:
         if i < len(chunks) - 1:
             combined += paragraph_silence
         log.info("  HF chunk %d/%d done", i + 1, len(chunks))
+        if on_progress:
+            on_progress(i + 1, len(chunks))
 
     mp3_buf = io.BytesIO()
     combined.export(mp3_buf, format="mp3", bitrate="128k")
@@ -835,7 +884,7 @@ def synthesize_huggingface(text: str, model_name: str) -> io.BytesIO:
     return mp3_buf
 
 
-def synthesize_kokoro(text: str, voice: str, speed: float, lang_code: str) -> io.BytesIO:
+def synthesize_kokoro(text: str, voice: str, speed: float, lang_code: str, on_progress=None) -> io.BytesIO:
     """Synthesize text → MP3 via Kokoro TTS.
     
     Args:
@@ -902,6 +951,8 @@ def synthesize_kokoro(text: str, voice: str, speed: float, lang_code: str) -> io
                 combined += silence
             
             log.info("  Kokoro chunk %d/%d done (%d chars)", i + 1, len(chunks), len(chunk))
+            if on_progress:
+                on_progress(i + 1, len(chunks))
         except Exception as e:
             log.exception("Kokoro chunk synthesis failed")
             raise
@@ -918,6 +969,7 @@ def synthesize_supertonic(
     lang: str,
     speed: float = 1.05,
     silence_duration: float = 0.3,
+    on_progress=None,
 ) -> io.BytesIO:
     """Synthesize text → MP3 via Supertonic TTS.
     
@@ -994,6 +1046,8 @@ def synthesize_supertonic(
                 combined += silence
             
             log.info("  Supertonic chunk %d/%d done (%d chars)", i + 1, len(chunks), len(chunk))
+            if on_progress:
+                on_progress(i + 1, len(chunks))
         except Exception as e:
             log.exception("Supertonic chunk synthesis failed")
             raise
@@ -1005,8 +1059,373 @@ def synthesize_supertonic(
 
 
 # ---------------------------------------------------------------------------
+# XTTS-v2 — voice cloning (English + multilingual)
+# ---------------------------------------------------------------------------
+
+_CEDILLA_TO_COMMA = str.maketrans({
+    "\u015f": "\u0219",  # ş → ș
+    "\u0163": "\u021b",  # ţ → ț
+    "\u015e": "\u0218",  # Ş → Ș
+    "\u0162": "\u021a",  # Ţ → Ț
+})
+
+
+def _normalize_romanian(text: str) -> str:
+    """Convert cedilla diacritics to comma-below (standard Romanian)."""
+    return text.translate(_CEDILLA_TO_COMMA)
+
+
+def _get_xtts_model(model_key: str = "base"):
+    """Load XTTS-v2 model via Coqui TTS lib and cache it."""
+    global _xtts_models
+    if model_key not in _xtts_models:
+        try:
+            from TTS.api import TTS as CoquiTTS
+            if model_key == "base":
+                log.info("Loading XTTS-v2 base model (~1.8GB on first run)")
+                _xtts_models[model_key] = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2")
+            else:
+                log.info("Loading XTTS model: %s", model_key)
+                _xtts_models[model_key] = CoquiTTS(model_key)
+        except ImportError:
+            log.error("Coqui TTS not installed. Install with: pip install TTS>=0.22.0")
+            raise
+    return _xtts_models[model_key]
+
+
+def _get_xtts_ro_model():
+    """Load the Romanian fine-tuned XTTS-v2 model and cache it."""
+    global _xtts_models
+    key = "xtts_ro"
+    if key not in _xtts_models:
+        try:
+            from TTS.tts.configs.xtts_config import XttsConfig
+            from TTS.tts.models.xtts import Xtts
+            from huggingface_hub import snapshot_download
+
+            log.info("Loading XTTS-v2 Romanian fine-tune (~1.8GB on first run)")
+            model_dir = snapshot_download("eduardem/xtts-v2-romanian")
+            config = XttsConfig()
+            config.load_json(str(Path(model_dir) / "config.json"))
+            model = Xtts.init_from_config(config)
+            model.load_checkpoint(config, checkpoint_dir=model_dir, use_deepspeed=False)
+            _xtts_models[key] = model
+        except ImportError:
+            log.error("Coqui TTS not installed. Install with: pip install TTS>=0.22.0")
+            raise
+    return _xtts_models[key]
+
+
+def synthesize_xtts(
+    text: str,
+    language: str,
+    reference_audio_path: str,
+    speed: float = 1.0,
+    on_progress=None,
+) -> io.BytesIO:
+    """Synthesize text → MP3 via XTTS-v2 with voice cloning.
+
+    Uses the low-level inference API so that speaker conditioning latents
+    are computed once and reused across all chunks (saves ~1-2s per chunk).
+    """
+    import numpy as np
+
+    tts = _get_xtts_model("base")
+    model = tts.synthesizer.tts_model
+    log.info("XTTS TTS: lang=%s, ref=%s, speed=%.2f, text_len=%d",
+             language, Path(reference_audio_path).name, speed, len(text))
+
+    # Pre-compute speaker conditioning once for all chunks
+    gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(
+        audio_path=[reference_audio_path]
+    )
+    log.info("  XTTS conditioning latents computed once")
+
+    chunks = chunk_text(text, 220)
+    combined = AudioSegment.empty()
+    silence = AudioSegment.silent(duration=400)
+
+    for i, chunk in enumerate(chunks):
+        out = model.inference(
+            text=chunk,
+            language=language,
+            gpt_cond_latent=gpt_cond_latent,
+            speaker_embedding=speaker_embedding,
+            speed=speed,
+        )
+        samples = np.array(out["wav"], dtype=np.float32)
+        sample_rate = 24000
+
+        max_val = np.abs(samples).max()
+        if max_val > 0:
+            samples = samples * (0.95 / max_val)
+
+        pcm = (samples * 32767).astype(np.int16)
+        wav_buf = io.BytesIO()
+        with wave.open(wav_buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm.tobytes())
+        wav_buf.seek(0)
+        combined += AudioSegment.from_wav(wav_buf)
+        if i < len(chunks) - 1:
+            combined += silence
+        log.info("  XTTS chunk %d/%d done", i + 1, len(chunks))
+        if on_progress:
+            on_progress(i + 1, len(chunks))
+
+    mp3_buf = io.BytesIO()
+    combined.export(mp3_buf, format="mp3", bitrate="128k")
+    mp3_buf.seek(0)
+    return mp3_buf
+
+
+def synthesize_xtts_ro(
+    text: str,
+    reference_audio_path: str,
+    speed: float = 1.0,
+    on_progress=None,
+) -> io.BytesIO:
+    """Synthesize Romanian text → MP3 via XTTS-v2 Romanian fine-tune."""
+    import torch
+    import numpy as np
+
+    model = _get_xtts_ro_model()
+    text = _normalize_romanian(text)
+    log.info("XTTS-RO TTS: ref=%s, speed=%.2f, text_len=%d",
+             Path(reference_audio_path).name, speed, len(text))
+
+    gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(
+        audio_path=[reference_audio_path]
+    )
+
+    chunks = chunk_text(text, 220)
+    combined = AudioSegment.empty()
+    silence = AudioSegment.silent(duration=400)
+
+    for i, chunk in enumerate(chunks):
+        out = model.inference(
+            text=chunk,
+            language="ro",
+            gpt_cond_latent=gpt_cond_latent,
+            speaker_embedding=speaker_embedding,
+            speed=speed,
+        )
+        samples = np.array(out["wav"], dtype=np.float32)
+        sample_rate = 24000
+
+        max_val = np.abs(samples).max()
+        if max_val > 0:
+            samples = samples * (0.95 / max_val)
+
+        pcm = (samples * 32767).astype(np.int16)
+        wav_buf = io.BytesIO()
+        with wave.open(wav_buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm.tobytes())
+        wav_buf.seek(0)
+        combined += AudioSegment.from_wav(wav_buf)
+        if i < len(chunks) - 1:
+            combined += silence
+        log.info("  XTTS-RO chunk %d/%d done", i + 1, len(chunks))
+        if on_progress:
+            on_progress(i + 1, len(chunks))
+
+    mp3_buf = io.BytesIO()
+    combined.export(mp3_buf, format="mp3", bitrate="128k")
+    mp3_buf.seek(0)
+    return mp3_buf
+
+
+# ---------------------------------------------------------------------------
+# SpeechT5 — multi-speaker TTS
+# ---------------------------------------------------------------------------
+
+# 10 pre-selected speaker x-vector indices from Matthijs/cmu-arctic-xvectors
+SPEECHT5_SPEAKERS = {
+    "clb": {"name": "CLB (Female)", "index": 7306},
+    "slt": {"name": "SLT (Female)", "index": 2961},
+    "rms": {"name": "RMS (Male)", "index": 1089},
+    "bdl": {"name": "BDL (Male)", "index": 4446},
+    "ksp": {"name": "KSP (Male)", "index": 6529},
+    "jmk": {"name": "JMK (Male)", "index": 8051},
+    "awb": {"name": "AWB (Male, Scottish)", "index": 5393},
+    "fem1": {"name": "Female Speaker 1", "index": 1500},
+    "fem2": {"name": "Female Speaker 2", "index": 3200},
+    "male1": {"name": "Male Speaker 1", "index": 6000},
+}
+
+
+def _get_speecht5():
+    """Load SpeechT5 processor, model, vocoder, and speaker embeddings."""
+    global _speecht5_cache
+    if "model" not in _speecht5_cache:
+        from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
+        from datasets import load_dataset
+        import torch
+
+        log.info("Loading SpeechT5 model + vocoder + speaker embeddings")
+        processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
+        model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
+        vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
+
+        ds = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+        embeddings = {}
+        for spk_id, info in SPEECHT5_SPEAKERS.items():
+            embeddings[spk_id] = torch.tensor(ds[info["index"]]["xvector"]).unsqueeze(0)
+
+        _speecht5_cache["processor"] = processor
+        _speecht5_cache["model"] = model
+        _speecht5_cache["vocoder"] = vocoder
+        _speecht5_cache["embeddings"] = embeddings
+    return _speecht5_cache
+
+
+def synthesize_speecht5(text: str, speaker_id: str = "clb", on_progress=None) -> io.BytesIO:
+    """Synthesize text → MP3 via SpeechT5 with speaker embedding."""
+    import torch
+    import numpy as np
+
+    cache = _get_speecht5()
+    processor = cache["processor"]
+    model = cache["model"]
+    vocoder = cache["vocoder"]
+    embedding = cache["embeddings"].get(speaker_id, cache["embeddings"]["clb"])
+
+    log.info("SpeechT5 TTS: speaker=%s, text_len=%d", speaker_id, len(text))
+
+    chunks = chunk_text(text, 500)
+    combined = AudioSegment.empty()
+    silence = AudioSegment.silent(duration=400)
+
+    for i, chunk in enumerate(chunks):
+        inputs = processor(text=chunk, return_tensors="pt")
+        with torch.no_grad():
+            speech = model.generate_speech(inputs["input_ids"], embedding, vocoder=vocoder)
+        samples = speech.numpy()
+        sample_rate = 16000
+
+        pcm = (samples * 32767).astype(np.int16)
+        wav_buf = io.BytesIO()
+        with wave.open(wav_buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm.tobytes())
+        wav_buf.seek(0)
+        combined += AudioSegment.from_wav(wav_buf)
+        if i < len(chunks) - 1:
+            combined += silence
+        log.info("  SpeechT5 chunk %d/%d done", i + 1, len(chunks))
+        if on_progress:
+            on_progress(i + 1, len(chunks))
+
+    mp3_buf = io.BytesIO()
+    combined.export(mp3_buf, format="mp3", bitrate="128k")
+    mp3_buf.seek(0)
+    return mp3_buf
+
+
+# ---------------------------------------------------------------------------
+# HF Inference API (cloud)
+# ---------------------------------------------------------------------------
+
+
+def synthesize_hf_cloud(text: str, model_name: str, hf_token: str, on_progress=None) -> io.BytesIO:
+    """Synthesize text → MP3 via HF Inference API (cloud, free tier)."""
+    import requests as http_requests
+
+    if not hf_token:
+        raise ValueError("HF_TOKEN is required for Hugging Face cloud inference. Set it in .env.")
+
+    api_url = f"https://router.huggingface.co/hf-inference/models/{model_name}"
+    headers = {"Authorization": f"Bearer {hf_token}"}
+
+    log.info("HF Cloud TTS: model=%s, text_len=%d", model_name, len(text))
+
+    chunks = chunk_text(text, 500)
+    combined = AudioSegment.empty()
+    silence = AudioSegment.silent(duration=400)
+
+    for i, chunk in enumerate(chunks):
+        resp = None
+        for attempt in range(4):
+            resp = http_requests.post(
+                api_url,
+                headers=headers,
+                json={"inputs": chunk},
+                timeout=60,
+            )
+            if resp.status_code == 200:
+                break
+            if resp.status_code in (429, 503):
+                wait = 2 ** attempt
+                log.warning("HF Cloud rate limited (%d), retrying in %ds", resp.status_code, wait)
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+
+        if resp is None or resp.status_code != 200:
+            raise RuntimeError(f"HF Cloud API failed after retries: {resp.status_code if resp else 'no response'}")
+
+        audio_buf = io.BytesIO(resp.content)
+        try:
+            segment = AudioSegment.from_file(audio_buf)
+        except Exception:
+            segment = AudioSegment.from_file(audio_buf, format="flac")
+        combined += segment
+        if i < len(chunks) - 1:
+            combined += silence
+        log.info("  HF Cloud chunk %d/%d done", i + 1, len(chunks))
+        if on_progress:
+            on_progress(i + 1, len(chunks))
+
+    mp3_buf = io.BytesIO()
+    combined.export(mp3_buf, format="mp3", bitrate="128k")
+    mp3_buf.seek(0)
+    return mp3_buf
+
+
+# ---------------------------------------------------------------------------
+# Language registry
+# ---------------------------------------------------------------------------
+
+LANGUAGE_REGISTRY = {
+    "en": {
+        "name": "English",
+        "backends": ["piper", "kokoro", "supertonic", "huggingface", "xtts", "polly", "hf_cloud"],
+        "default_backend": "piper",
+    },
+    "ro": {
+        "name": "Romanian",
+        "backends": ["xtts_ro", "huggingface", "hf_cloud"],
+        "default_backend": "xtts_ro",
+    },
+}
+
+# Reference audio directory
+_REFERENCE_AUDIO_DIR = _PROJECT_ROOT / "reference_audio"
+_REFERENCE_AUDIO_DIR.mkdir(exist_ok=True)
+_ALLOWED_AUDIO_EXT = {".wav", ".mp3", ".m4a", ".flac", ".ogg"}
+_MAX_REFERENCE_MB = 10
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+
+@app.route("/reference_audio/<path:filename>")
+def serve_reference_audio(filename):
+    """Serve reference audio files for preview."""
+    safe = Path(filename).name
+    filepath = _REFERENCE_AUDIO_DIR / safe
+    if not filepath.is_file():
+        return _err("File not found", 404)
+    return send_file(str(filepath))
 
 
 @app.route("/")
@@ -1022,11 +1441,11 @@ def index():
                 onnx_models.append(str(p))
             except ValueError as e:
                 log.warning("Skipping invalid Piper model in UI list: %s", e)
-    # Discover PDFs and EPUBs in input/ folder
+    # Discover books (PDFs and EPUBs) in input/ folder
     input_dir = project_dir / "input"
-    input_files = []
+    input_books = []
     if input_dir.is_dir():
-        input_files = sorted(
+        input_books = sorted(
             p.name for p in input_dir.glob("*")
             if p.suffix.lower() in {".pdf", ".epub"}
         )
@@ -1034,13 +1453,53 @@ def index():
         "index.html",
         config=CONFIG,
         onnx_models=onnx_models,
-        input_pdfs=input_files,
+        input_books=input_books,
     )
 
 
 def _err(msg: str, status: int = 400):
     """Return a JSON error so the fetch-based frontend can display it."""
     return jsonify({"error": msg}), status
+
+
+@app.route("/api/backend-status")
+def api_backend_status():
+    """Return model readiness for each backend."""
+    cache = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    st_cache = Path(os.environ.get("SUPERTONIC_CACHE_DIR", Path.home() / ".cache" / "supertonic2"))
+    models_dir = Path(__file__).parent / "models"
+
+    def _has_hf_model(repo_id: str) -> bool:
+        model_dir = cache / "hub" / f"models--{repo_id.replace('/', '--')}"
+        if not model_dir.is_dir():
+            return False
+        return (
+            any(model_dir.rglob("*.bin"))
+            or any(model_dir.rglob("*.safetensors"))
+            or any(model_dir.rglob("*.onnx"))
+            or any(model_dir.rglob("*.pth"))
+        )
+
+    piper_ready = any(models_dir.glob("*.onnx")) if models_dir.is_dir() else False
+    kokoro_ready = _has_hf_model("hexgrad/Kokoro-82M")
+    supertonic_ready = st_cache.is_dir() and any(st_cache.rglob("*.onnx"))
+    hf_ready = _has_hf_model("facebook/mms-tts-eng")
+    xtts_ready = _has_hf_model("coqui/XTTS-v2")
+    xtts_ro_ready = _has_hf_model("eduardem/xtts-v2-romanian")
+    speecht5_ready = _has_hf_model("microsoft/speecht5_tts")
+    hf_cloud_ready = bool(os.getenv("HF_TOKEN", "").strip())
+
+    return jsonify({
+        "piper": {"ready": piper_ready, "note": "ONNX models in models/ folder"},
+        "kokoro": {"ready": kokoro_ready, "note": "Downloads ~327MB from HuggingFace on first use"},
+        "supertonic": {"ready": supertonic_ready, "note": "Downloads ~305MB ONNX model on first use"},
+        "huggingface": {"ready": hf_ready, "note": "Downloads ~50MB from HuggingFace on first use"},
+        "xtts": {"ready": xtts_ready, "note": "Downloads ~1.8GB XTTS-v2 model on first use"},
+        "xtts_ro": {"ready": xtts_ro_ready, "note": "Downloads ~1.8GB Romanian fine-tune on first use"},
+        "speecht5": {"ready": speecht5_ready, "note": "Downloads ~300MB SpeechT5 model on first use"},
+        "hf_cloud": {"ready": hf_cloud_ready, "note": "Requires HF_TOKEN in .env"},
+        "polly": {"ready": True, "note": "Cloud API — no local model needed"},
+    })
 
 
 @app.route("/api/input-files")
@@ -1054,6 +1513,61 @@ def api_input_files():
             if p.suffix.lower() in {".pdf", ".epub"}
         )
     return jsonify({"files": files})
+
+
+@app.route("/api/languages")
+def api_languages():
+    """Return the language registry for frontend filtering."""
+    return jsonify(LANGUAGE_REGISTRY)
+
+
+@app.route("/api/upload-reference", methods=["POST"])
+def api_upload_reference():
+    """Upload a reference audio file for voice cloning."""
+    f = request.files.get("audio")
+    if not f or not f.filename:
+        return _err("No audio file provided.")
+    ext = Path(f.filename).suffix.lower()
+    if ext not in _ALLOWED_AUDIO_EXT:
+        return _err(f"Invalid audio type '{ext}'. Allowed: {', '.join(sorted(_ALLOWED_AUDIO_EXT))}")
+    # Check size
+    f.seek(0, 2)
+    size = f.tell()
+    f.seek(0)
+    if size > _MAX_REFERENCE_MB * 1024 * 1024:
+        return _err(f"File too large ({size // 1024 // 1024}MB). Max: {_MAX_REFERENCE_MB}MB.")
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(f.filename).name)
+    dest = _REFERENCE_AUDIO_DIR / safe_name
+    f.save(str(dest))
+    log.info("Saved reference audio: %s (%d bytes)", safe_name, size)
+    return jsonify({"saved": True, "filename": safe_name})
+
+
+@app.route("/api/reference-voices")
+def api_reference_voices():
+    """List available reference audio files with durations."""
+    voices = []
+    if _REFERENCE_AUDIO_DIR.is_dir():
+        for p in sorted(_REFERENCE_AUDIO_DIR.iterdir()):
+            if p.suffix.lower() in _ALLOWED_AUDIO_EXT:
+                try:
+                    seg = AudioSegment.from_file(str(p))
+                    duration = round(len(seg) / 1000, 1)
+                except Exception:
+                    duration = None
+                voices.append({
+                    "filename": p.name,
+                    "duration_s": duration,
+                    "size_kb": round(p.stat().st_size / 1024, 1),
+                })
+    return jsonify({"voices": voices})
+
+
+@app.route("/api/hf-speakers")
+def api_hf_speakers():
+    """Return available SpeechT5 speaker presets."""
+    speakers = [{"id": k, "name": v["name"]} for k, v in SPEECHT5_SPEAKERS.items()]
+    return jsonify({"speakers": speakers})
 
 
 @app.route("/api/polly-voices")
@@ -1152,12 +1666,12 @@ def api_pdf_info():
     pdf_file = request.files.get("pdf")
 
     if input_name:
-        pdf_path = Path(__file__).parent / "input" / Path(input_name).name
-        if not pdf_path.is_file():
+        book_path = Path(__file__).parent / "input" / Path(input_name).name
+        if not book_path.is_file():
             return _err(f"File not found in input/: {input_name}")
-        file_ext = pdf_path.suffix.lower()
-        file_stream = open(pdf_path, "rb")
-        filename = pdf_path.name
+        file_ext = book_path.suffix.lower()
+        file_stream = open(book_path, "rb")
+        filename = book_path.name
     elif pdf_file:
         file_ext = Path(pdf_file.filename).suffix.lower()
         file_stream = pdf_file.stream
@@ -1176,7 +1690,7 @@ def api_pdf_info():
 
 
 def _api_pdf_info_impl(file_stream, filename: str):
-    """PDF-specific info extraction."""
+    """PDF-specific page/chapter info extraction."""
     reader = PdfReader(file_stream)
     total = len(reader.pages)
     pages = []
@@ -1205,7 +1719,86 @@ def _api_pdf_info_impl(file_stream, filename: str):
                         pass
         _walk_outline(reader.outline)
 
-    # 2) Fallback: heuristic scan for chapter headings in page text
+    # 2) Detect "Book Title  |  Section Name" page headers
+    #    When the section part changes between pages, that's a chapter boundary.
+    if not chapters:
+        header_re = re.compile(r'^.{3,}\s*\|\s*(.+)$')
+        chapter_label_re = re.compile(
+            r'^(?:CHAPTER\s+\d+|PROLOGUE|EPILOGUE|BIBLIOGRAPHY'
+            r'|INTRODUCTION|CONCLUSION|APPENDIX)\s*$',
+            re.IGNORECASE,
+        )
+        prev_section = None
+        for i, page in enumerate(reader.pages):
+            txt = (page.extract_text() or "")[:500].strip()
+            first_line = txt.split("\n")[0].strip() if txt else ""
+            m = header_re.match(first_line)
+            if m:
+                section = m.group(1).strip().rstrip(".")
+                if section != prev_section:
+                    title = section
+                    lines = txt.split("\n")[1:]
+                    # Find the chapter label line (e.g. "CHAPTER 8"),
+                    # skipping possible header continuation lines.
+                    label_idx = None
+                    for j, line in enumerate(lines):
+                        if chapter_label_re.match(line.strip()):
+                            label_idx = j
+                            break
+                    if label_idx is not None:
+                        label = lines[label_idx].strip()
+                        label_norm = " ".join(label.split()).upper()
+                        subtitle_parts = []
+                        for sl in lines[label_idx + 1:]:
+                            sl_s = sl.strip()
+                            if not sl_s:
+                                break
+                            sl_norm = " ".join(sl_s.split()).upper()
+                            # Body text starts with a repeat of the label
+                            if sl_norm.startswith(label_norm):
+                                break
+                            subtitle_parts.append(sl_s)
+                        if subtitle_parts:
+                            title = label.title() + ": " + " ".join(subtitle_parts)
+                    prev_section = section
+                    chapters.append({"title": title, "page": i + 1, "depth": 0})
+
+    # 3) Fallback: parse a "TABLE OF CONTENTS" page for entries, then
+    #    locate each entry in the document by scanning page text.
+    if not chapters:
+        toc_page_text = None
+        for i, page in enumerate(reader.pages[:20]):  # TOC is near the start
+            txt = (page.extract_text() or "").strip()
+            if re.search(r'TABLE\s+OF\s+CONTENTS|CONTENTS', txt, re.IGNORECASE):
+                toc_page_text = txt
+                break
+        if toc_page_text:
+            toc_entry_re = re.compile(
+                r'^((?:Prologue|Epilogue|Chapter\s+\d+|Part\s+[\dIVXLCivxlc]+'
+                r'|Introduction|Conclusion|Appendix|Bibliography'
+                r'|Acknowledgements?)[\s:—–\-].*)$',
+                re.IGNORECASE | re.MULTILINE,
+            )
+            entries = [m.group(1).strip() for m in toc_entry_re.finditer(toc_page_text)]
+            # Also capture standalone entries like "Bibliography and Sources"
+            standalone_re = re.compile(
+                r'^(Bibliography[\w\s]*)$', re.IGNORECASE | re.MULTILINE,
+            )
+            for m in standalone_re.finditer(toc_page_text):
+                val = m.group(1).strip()
+                if val not in entries:
+                    entries.append(val)
+            # Match each entry to a page by searching text
+            for entry in entries:
+                # Build a short search key from the entry
+                key = entry.split('\n')[0].strip()[:60]
+                for pi, page in enumerate(reader.pages):
+                    txt = (page.extract_text() or "")[:500]
+                    if key in txt and pi + 1 not in [c["page"] for c in chapters]:
+                        chapters.append({"title": entry, "page": pi + 1, "depth": 0})
+                        break
+
+    # 4) Last fallback: heuristic scan for chapter headings in page text
     if not chapters:
         chapter_re = re.compile(
             r'^(?:chapter|part|section|prologue|epilogue|introduction|conclusion)'
@@ -1307,22 +1900,33 @@ def _api_epub_info(file_stream, filename: str):
         return _err(f"Failed to read EPUB: {e}")
 
 
+@app.route("/progress/<job_id>")
+def progress(job_id):
+    """Return current conversion progress for a job."""
+    with _jobs_lock:
+        info = _jobs.get(job_id)
+    if info is None:
+        return jsonify({"phase": "unknown", "current": 0, "total": 0})
+    return jsonify(info)
+
+
 @app.route("/convert", methods=["POST"])
 def convert():
     t0 = time.time()
 
     # --- Collect & validate form data ---
+    job_id = request.form.get("job_id", "")
     save_to_output = request.form.get("save_to_output") == "1"
     input_file_name = request.form.get("input_file", "").strip()
     pdf_file = request.files.get("pdf")
 
     # Determine file source: input/ folder file or uploaded file
     if input_file_name:
-        pdf_path = Path(__file__).parent / "input" / Path(input_file_name).name
-        if not pdf_path.is_file():
+        book_path = Path(__file__).parent / "input" / Path(input_file_name).name
+        if not book_path.is_file():
             return _err(f"File not found in input/: {input_file_name}")
-        file_stream = open(pdf_path, "rb")
-        pdf_filename = pdf_path.name
+        file_stream = open(book_path, "rb")
+        source_filename = book_path.name
     elif pdf_file and pdf_file.filename:
         ext = Path(pdf_file.filename).suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
@@ -1336,7 +1940,7 @@ def convert():
                 return _err("The uploaded file does not appear to be a valid PDF.")
         
         file_stream = pdf_file.stream
-        pdf_filename = pdf_file.filename
+        source_filename = pdf_file.filename
     else:
         return _err("Please upload a file or select one from the input folder.")
 
@@ -1344,7 +1948,7 @@ def convert():
     backend = request.form.get("backend", CONFIG["DEFAULT_BACKEND"])
     voice = request.form.get("voice", "").strip()
 
-    if backend not in ("polly", "piper", "huggingface", "kokoro", "supertonic"):
+    if backend not in ("polly", "piper", "huggingface", "kokoro", "supertonic", "xtts", "xtts_ro", "hf_cloud", "speecht5"):
         return _err(f"Unknown backend: {backend}")
 
     log.info(
@@ -1352,13 +1956,14 @@ def convert():
         backend,
         page_range,
         voice or "(default)",
-        pdf_filename,
+        source_filename,
         save_to_output,
     )
 
     # --- Extract text ---
+    _report_progress(job_id, 0, 1, phase="extracting")
     try:
-        file_ext = Path(pdf_filename).suffix.lower()
+        file_ext = Path(source_filename).suffix.lower()
         if file_ext == ".epub":
             text, label = extract_text_from_epub(file_stream, page_range)
         else:  # .pdf
@@ -1384,6 +1989,8 @@ def convert():
     log.info("Extracted text: %d chars from %s", len(text), label)
 
     # --- Synthesize ---
+    _report_progress(job_id, 0, 1, phase="synthesizing")
+    on_prog = lambda cur, tot: _report_progress(job_id, cur, tot, phase="synthesizing")
     provider_detail = "default"
     polly_chars_billed: int | None = None
     polly_cost_usd: float | None = None
@@ -1394,7 +2001,7 @@ def convert():
             voice_id = voice or CONFIG["POLLY_VOICE_ID"]
             engine = request.form.get("engine", CONFIG["POLLY_ENGINE"])
             provider_detail = f"{voice_id}_{engine}"
-            mp3_buf, polly_chars_billed = synthesize_polly(text, voice_id, engine)
+            mp3_buf, polly_chars_billed = synthesize_polly(text, voice_id, engine, on_progress=on_prog)
             rate = _POLLY_RATES.get(engine.lower(), _POLLY_RATES["neural"])
             polly_cost_usd = polly_chars_billed * rate / 1_000_000
             prosody_info = {"engine": engine}
@@ -1417,20 +2024,21 @@ def convert():
                 noise_scale=ns,
                 noise_w_scale=nw,
                 sentence_silence=ss,
+                on_progress=on_prog,
             )
             prosody_info = {"ls": ls, "ns": ns, "nw": nw, "ss": ss}
 
         elif backend == "huggingface":
             model_name = voice or CONFIG["HF_MODEL"]
             provider_detail = model_name
-            mp3_buf = synthesize_huggingface(text, model_name)
+            mp3_buf = synthesize_huggingface(text, model_name, on_progress=on_prog)
 
         elif backend == "kokoro":
             voice_id = voice or CONFIG["KOKORO_VOICE"]
             speed = float(request.form.get("kokoro_speed", CONFIG["KOKORO_SPEED"]))
             lang_code = request.form.get("kokoro_lang", CONFIG["KOKORO_LANG"])
             provider_detail = f"{voice_id}"
-            mp3_buf = synthesize_kokoro(text, voice_id, speed, lang_code)
+            mp3_buf = synthesize_kokoro(text, voice_id, speed, lang_code, on_progress=on_prog)
             prosody_info = {"spd": speed, "lang": lang_code}
 
         elif backend == "supertonic":
@@ -1439,17 +2047,57 @@ def convert():
             st_speed = float(request.form.get("supertonic_speed", CONFIG["SUPERTONIC_SPEED"]))
             st_silence = float(request.form.get("supertonic_silence", CONFIG["SUPERTONIC_SILENCE"]))
             provider_detail = f"{voice_id}"
-            mp3_buf = synthesize_supertonic(text, voice_id, lang, speed=st_speed, silence_duration=st_silence)
+            mp3_buf = synthesize_supertonic(text, voice_id, lang, speed=st_speed, silence_duration=st_silence, on_progress=on_prog)
             prosody_info = {"spd": st_speed, "sil": st_silence, "lang": lang}
+
+        elif backend == "xtts":
+            ref_audio = request.form.get("reference_audio", "").strip()
+            if not ref_audio:
+                return _err("Voice cloning requires a reference audio file. Upload one first.")
+            ref_path = _REFERENCE_AUDIO_DIR / Path(ref_audio).name
+            if not ref_path.is_file():
+                return _err(f"Reference audio not found: {ref_audio}")
+            xtts_lang = request.form.get("xtts_language", "en")
+            xtts_speed = float(request.form.get("xtts_speed", "1.0"))
+            provider_detail = f"xtts-v2_{xtts_lang}"
+            mp3_buf = synthesize_xtts(text, xtts_lang, str(ref_path), speed=xtts_speed, on_progress=on_prog)
+            prosody_info = {"spd": xtts_speed, "lang": xtts_lang}
+
+        elif backend == "xtts_ro":
+            ref_audio = request.form.get("reference_audio", "").strip()
+            if not ref_audio:
+                return _err("Voice cloning requires a reference audio file. Upload one first.")
+            ref_path = _REFERENCE_AUDIO_DIR / Path(ref_audio).name
+            if not ref_path.is_file():
+                return _err(f"Reference audio not found: {ref_audio}")
+            xtts_speed = float(request.form.get("xtts_speed", "1.0"))
+            provider_detail = "xtts-v2-romanian"
+            mp3_buf = synthesize_xtts_ro(text, str(ref_path), speed=xtts_speed, on_progress=on_prog)
+            prosody_info = {"spd": xtts_speed, "lang": "ro"}
+
+        elif backend == "speecht5":
+            speaker_id = request.form.get("speecht5_speaker", "clb")
+            if speaker_id not in SPEECHT5_SPEAKERS:
+                speaker_id = "clb"
+            provider_detail = f"speecht5_{speaker_id}"
+            mp3_buf = synthesize_speecht5(text, speaker_id, on_progress=on_prog)
+
+        elif backend == "hf_cloud":
+            model_name = voice or CONFIG["HF_MODEL"]
+            hf_token = os.getenv("HF_TOKEN", "")
+            provider_detail = f"hf-cloud_{model_name}"
+            mp3_buf = synthesize_hf_cloud(text, model_name, hf_token, on_progress=on_prog)
 
     except Exception as e:
         log.exception("TTS synthesis failed")
+        _clear_job(job_id)
         return _err(f"TTS error ({backend}): {e}", 500)
 
+    _report_progress(job_id, 1, 1, phase="encoding")
     elapsed = time.time() - t0
     log.info("Done in %.1fs — serving MP3", elapsed)
 
-    filename = build_output_filename(pdf_filename, label, backend, provider_detail, prosody_info)
+    filename = build_output_filename(source_filename, label, backend, provider_detail, prosody_info)
 
     extra: dict = {}
     if polly_chars_billed is not None:
@@ -1462,8 +2110,10 @@ def convert():
         output_path.write_bytes(mp3_buf.read())
         mp3_buf.seek(0)
         log.info("Saved to %s", output_path)
+        _clear_job(job_id)
         return jsonify({"saved": True, "filename": filename, "path": str(output_path), **extra})
 
+    _clear_job(job_id)
     return send_file(
         mp3_buf,
         mimetype="audio/mpeg",
