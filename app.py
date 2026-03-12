@@ -135,6 +135,41 @@ def _report_downloading(label: str) -> None:
     log.info("Downloading model: %s (this only happens once)", label)
 
 
+def _auto_install_extra(package: str, extra: str) -> None:
+    """Install a uv optional extra if `package` is not yet importable.
+
+    Runs ``uv sync --extra <extra>`` in the project root, then invalidates
+    Python's import caches so the newly installed packages can be imported
+    immediately without restarting the server.
+    """
+    import importlib.util
+    if importlib.util.find_spec(package) is not None:
+        return  # already installed, nothing to do
+
+    job_id = getattr(_job_context, 'job_id', None)
+    _report_progress(job_id, 0, 0, phase="installing")
+    log.info("Auto-installing extra '%s' (uv sync --extra %s) …", package, extra)
+
+    import importlib
+    import subprocess
+    project_root = Path(__file__).parent
+    result = subprocess.run(
+        ["uv", "sync", "--extra", extra],
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        log.error("uv sync failed:\n%s", result.stderr)
+        raise RuntimeError(
+            f"Failed to auto-install '{extra}' extra.\n"
+            f"Run manually: uv sync --extra {extra}\n"
+            f"{result.stderr.strip()}"
+        )
+    importlib.invalidate_caches()
+    log.info("Extra '%s' installed successfully.", extra)
+
+
 def _report_progress(job_id: str | None, current: int, total: int, phase: str = "synth"):
     """Update progress for a running job (thread-safe)."""
     if not job_id:
@@ -252,11 +287,8 @@ def _get_piper_voice(model_path: str):
     """Load PiperVoice once and cache it."""
     global _piper_voice
     if _piper_voice is None or _piper_voice._model_path != model_path:
-        try:
-            from piper import PiperVoice
-        except ImportError:
-            log.error("Piper not installed. Install with: uv sync --extra piper")
-            raise
+        _auto_install_extra("piper", "piper")
+        from piper import PiperVoice
         log.info("Loading Piper model: %s", model_path)
         _piper_voice = PiperVoice.load(model_path)
         _piper_voice._model_path = model_path  # tag for cache check
@@ -267,11 +299,8 @@ def _get_hf_pipeline(model_name: str):
     """Load HF TTS pipeline once per model and cache it."""
     global _hf_pipelines
     if model_name not in _hf_pipelines:
-        try:
-            from transformers import pipeline as hf_pipeline
-        except ImportError:
-            log.error("Transformers not installed. Install with: uv sync --extra huggingface")
-            raise
+        _auto_install_extra("transformers", "huggingface")
+        from transformers import pipeline as hf_pipeline
         _report_downloading(f"HuggingFace TTS: {model_name}")
         log.info("Loading HF TTS model: %s", model_name)
         _hf_pipelines[model_name] = hf_pipeline("text-to-speech", model=model_name)
@@ -288,14 +317,11 @@ def _get_kokoro_pipeline(lang_code: str):
     """
     global _kokoro_pipelines
     if lang_code not in _kokoro_pipelines:
-        try:
-            from kokoro import KPipeline
-            _report_downloading(f"Kokoro (lang={lang_code})")
-            log.info("Loading Kokoro TTS pipeline for lang=%s", lang_code)
-            _kokoro_pipelines[lang_code] = KPipeline(lang_code=lang_code)
-        except ImportError:
-            log.error("Kokoro not installed. Install with: uv sync --dev")
-            raise
+        _auto_install_extra("kokoro", "kokoro")
+        from kokoro import KPipeline
+        _report_downloading(f"Kokoro (lang={lang_code})")
+        log.info("Loading Kokoro TTS pipeline for lang=%s", lang_code)
+        _kokoro_pipelines[lang_code] = KPipeline(lang_code=lang_code)
     return _kokoro_pipelines[lang_code]
 
 
@@ -306,14 +332,11 @@ def _get_supertonic_tts():
     """
     global _supertonic_tts
     if _supertonic_tts is None:
-        try:
-            from supertonic import TTS
-            _report_downloading("Supertonic (~305 MB)")
-            log.info("Loading Supertonic TTS (may download ~305MB model on first run)")
-            _supertonic_tts = TTS(auto_download=True)
-        except ImportError:
-            log.error("Supertonic not installed. Install with: uv sync --extra supertonic")
-            raise
+        _auto_install_extra("supertonic", "supertonic")
+        from supertonic import TTS
+        _report_downloading("Supertonic (~305 MB)")
+        log.info("Loading Supertonic TTS (may download ~305MB model on first run)")
+        _supertonic_tts = TTS(auto_download=True)
     return _supertonic_tts
 
 
@@ -1435,19 +1458,16 @@ def _get_xtts_model(model_key: str = "base"):
     """Load XTTS-v2 model via Coqui TTS lib and cache it."""
     global _xtts_models
     if model_key not in _xtts_models:
-        try:
-            from TTS.api import TTS as CoquiTTS
-            if model_key == "base":
-                _report_downloading("XTTS-v2 base (~1.8 GB)")
-                log.info("Loading XTTS-v2 base model (~1.8GB on first run)")
-                _xtts_models[model_key] = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2")
-            else:
-                _report_downloading(f"XTTS model: {model_key}")
-                log.info("Loading XTTS model: %s", model_key)
-                _xtts_models[model_key] = CoquiTTS(model_key)
-        except ImportError:
-            log.error("Coqui TTS not installed. Install with: uv sync --extra xtts")
-            raise
+        _auto_install_extra("TTS", "xtts")
+        from TTS.api import TTS as CoquiTTS
+        if model_key == "base":
+            _report_downloading("XTTS-v2 base (~1.8 GB)")
+            log.info("Loading XTTS-v2 base model (~1.8GB on first run)")
+            _xtts_models[model_key] = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2")
+        else:
+            _report_downloading(f"XTTS model: {model_key}")
+            log.info("Loading XTTS model: %s", model_key)
+            _xtts_models[model_key] = CoquiTTS(model_key)
     return _xtts_models[model_key]
 
 
@@ -1456,22 +1476,19 @@ def _get_xtts_ro_model():
     global _xtts_models
     key = "xtts_ro"
     if key not in _xtts_models:
-        try:
-            from TTS.tts.configs.xtts_config import XttsConfig
-            from TTS.tts.models.xtts import Xtts
-            from huggingface_hub import snapshot_download
+        _auto_install_extra("TTS", "xtts")
+        from TTS.tts.configs.xtts_config import XttsConfig
+        from TTS.tts.models.xtts import Xtts
+        from huggingface_hub import snapshot_download
 
-            _report_downloading("XTTS-v2 Romanian fine-tune (~1.8 GB)")
-            log.info("Loading XTTS-v2 Romanian fine-tune (~1.8GB on first run)")
-            model_dir = snapshot_download("eduardem/xtts-v2-romanian")
-            config = XttsConfig()
-            config.load_json(str(Path(model_dir) / "config.json"))
-            model = Xtts.init_from_config(config)
-            model.load_checkpoint(config, checkpoint_dir=model_dir, use_deepspeed=False)
-            _xtts_models[key] = model
-        except ImportError:
-            log.error("Coqui TTS not installed. Install with: uv sync --extra xtts")
-            raise
+        _report_downloading("XTTS-v2 Romanian fine-tune (~1.8 GB)")
+        log.info("Loading XTTS-v2 Romanian fine-tune (~1.8GB on first run)")
+        model_dir = snapshot_download("eduardem/xtts-v2-romanian")
+        config = XttsConfig()
+        config.load_json(str(Path(model_dir) / "config.json"))
+        model = Xtts.init_from_config(config)
+        model.load_checkpoint(config, checkpoint_dir=model_dir, use_deepspeed=False)
+        _xtts_models[key] = model
     return _xtts_models[key]
 
 
@@ -1622,13 +1639,11 @@ def _get_speecht5():
     """Load SpeechT5 processor, model, vocoder, and speaker embeddings."""
     global _speecht5_cache
     if "model" not in _speecht5_cache:
-        try:
-            from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
-            from datasets import load_dataset
-            import torch
-        except ImportError:
-            log.error("SpeechT5 deps not installed. Install with: uv sync --extra speecht5")
-            raise
+        _auto_install_extra("transformers", "speecht5")
+        _auto_install_extra("datasets", "speecht5")
+        from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
+        from datasets import load_dataset
+        import torch
 
         _report_downloading("SpeechT5 (microsoft/speecht5_tts)")
         log.info("Loading SpeechT5 model + vocoder + speaker embeddings")
@@ -2021,8 +2036,6 @@ def api_polly_voices():
         return jsonify({"error": str(e), "voices": []})
 
 
-# Supertonic voice catalogue — static so the voices endpoint works without
-# importing supertonic. Matches the voice_style_names the library exposes.
 SUPERTONIC_VOICES: dict[str, list[dict]] = {
     "Female": [
         {"id": "F1", "name": "Female 1"},
@@ -2599,6 +2612,10 @@ def _convert_chapters(file_stream, source_filename, input_file_name,
             try:
                 result = _do_synthesis(text, backend, synth_params,
                                        on_progress=None)
+            except ImportError:
+                _clear_job(job_id)
+                extra = _BACKEND_EXTRA.get(backend, backend)
+                return _err(f"Backend '{backend}' requires optional dependencies. Run: uv sync --extra {extra}", 400)
             except Exception as e:
                 log.exception("TTS failed for chapter: %s", title)
                 _clear_job(job_id)
@@ -2696,6 +2713,9 @@ def voice_test():
 
     try:
         result = _do_synthesis(text, backend, synth_params)
+    except ImportError:
+        extra = _BACKEND_EXTRA.get(backend, backend)
+        return _err(f"Backend '{backend}' requires optional dependencies. Run: uv sync --extra {extra}", 400)
     except ValueError as e:
         return _err(str(e), 400)
     except Exception as e:
@@ -2806,6 +2826,10 @@ def convert():
         log.info("Single-file conversion cancelled (job %s)", job_id)
         _clear_job(job_id)
         return _err("Conversion was cancelled.", 400)
+    except ImportError as e:
+        _clear_job(job_id)
+        extra = _BACKEND_EXTRA.get(backend, backend)
+        return _err(f"Backend '{backend}' requires optional dependencies. Run: uv sync --extra {extra}", 400)
     except ValueError as e:
         _clear_job(job_id)
         return _err(str(e))

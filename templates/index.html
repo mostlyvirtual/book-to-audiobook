@@ -1942,6 +1942,10 @@
           progressFill.style.width = '10%';
           progressPhase.textContent = 'Downloading model\u2026';
           progressLabel.textContent = 'First-run download \u2014 this only happens once';
+        } else if (p.phase === 'installing') {
+          progressFill.style.width = '5%';
+          progressPhase.textContent = 'Installing dependencies\u2026';
+          progressLabel.textContent = 'One-time setup \u2014 this only happens once';
         }
       } catch (_) {}
       if (pollActive) setTimeout(poll, 500);
