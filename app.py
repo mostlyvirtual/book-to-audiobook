@@ -391,6 +391,140 @@ def _remove_artifacts(text: str) -> str:
     return text
 
 
+# ---------------------------------------------------------------------------
+# PDF running-header / footer stripping
+# ---------------------------------------------------------------------------
+
+def _build_pdf_header_patterns(reader) -> dict:
+    """Scan a PDF to detect running headers via frequency analysis.
+
+    Returns a dict with:
+      - header_lines: set of exact first-line strings (Strategy 1: exact match)
+      - header_prefix: common prefix string (Strategy 2: shared prefix)
+      - continuation_lines: set of short second-line fragments that are header overflow
+    Only one of header_lines/header_prefix will be populated.
+    Returns {} if no running headers detected.
+    """
+    from collections import Counter
+    import os
+
+    total_pages = len(reader.pages)
+    if total_pages < 4:
+        return {}
+
+    first_lines: list[str] = []
+    second_line_counter: Counter[str] = Counter()
+
+    for pg in range(total_pages):
+        text = reader.pages[pg].extract_text() or ""
+        lines = text.split("\n")
+        if not lines:
+            first_lines.append("")
+            continue
+        first_lines.append(lines[0].strip())
+        if len(lines) >= 2:
+            second_line_counter[lines[1].strip()] += 1
+
+    exact_counter = Counter(first_lines)
+
+    # Strategy 1: Exact match — first lines appearing on ≥ 25% of pages
+    threshold = max(3, total_pages * 0.25)
+    header_lines = {
+        line for line, count in exact_counter.items()
+        if count >= threshold and line
+    }
+
+    # Strategy 2: Common prefix — if exact match fails, look for a shared prefix
+    # (handles PDFs where the header changes per section, e.g. "Title | Ch. N")
+    header_prefix = ""
+    if not header_lines:
+        frequent = [
+            line for line, count in exact_counter.items()
+            if count >= 2 and line
+        ]
+        if len(frequent) >= 2:
+            prefix = os.path.commonprefix(frequent)
+            prefix_matches = sum(1 for l in first_lines if l.startswith(prefix))
+            if len(prefix) >= 10 and prefix_matches >= total_pages * 0.5:
+                header_prefix = prefix
+
+    if not header_lines and not header_prefix:
+        return {}
+
+    # Header continuations: short second lines that repeat on ≥ 3 pages
+    continuation_lines: set[str] = set()
+    for line, count in second_line_counter.items():
+        if count >= 3 and len(line) < 25:
+            if not re.match(r"^(CHAPTER\s+\d|PROLOGUE|EPILOGUE)", line, re.I):
+                continuation_lines.add(line)
+
+    result: dict = {"continuation_lines": continuation_lines}
+    if header_lines:
+        result["header_lines"] = header_lines
+    if header_prefix:
+        result["header_prefix"] = header_prefix
+    return result
+
+
+_CHAPTER_LABEL_RE = re.compile(
+    r"^(CHAPTER\s+\d+|PROLOGUE|EPILOGUE|BIBLIOGRAPHY"
+    r"|INTRODUCTION|FOREWORD|PREFACE|AFTERWORD"
+    r"|APPENDIX(?:\s+[A-Z])?)$",
+    re.IGNORECASE,
+)
+
+
+def _strip_page_headers(page_text: str, patterns: dict) -> str:
+    """Remove running headers, continuations, and chapter-label echoes
+    from a single page's extracted text.
+
+    Safe: only removes lines at the TOP of the page that match detected
+    patterns — never touches mid-page content.
+    """
+    if not patterns:
+        return page_text
+
+    header_lines = patterns.get("header_lines", set())
+    header_prefix = patterns.get("header_prefix", "")
+    continuation_lines = patterns.get("continuation_lines", set())
+
+    lines = page_text.split("\n")
+    drop = 0  # number of leading lines to remove
+
+    if not lines:
+        return page_text
+
+    # Step 1: Strip running header (first line)
+    first = lines[0].strip()
+    is_header = (first in header_lines) or (header_prefix and first.startswith(header_prefix))
+    if is_header:
+        drop = 1
+
+        # Step 2: Strip header continuation (second line, if present)
+        if len(lines) > drop and lines[drop].strip() in continuation_lines:
+            drop += 1
+
+        # Step 3: Strip chapter-label echo on chapter-opening pages.
+        # Pattern: "CHAPTER N" + "Subtitle" + "CHAPTER N Subtitle body text..."
+        # The third line already contains the label + subtitle merged into body,
+        # so the standalone label and subtitle lines are decorative duplicates.
+        remaining = lines[drop:]
+        if len(remaining) >= 3:
+            l1 = remaining[0].strip()
+            l2 = remaining[1].strip()
+            l3 = remaining[2].strip()
+            if _CHAPTER_LABEL_RE.match(l1):
+                # Check if l3 starts with "LABEL SUBTITLE" (the echo)
+                expected_prefix = l1 + " " + l2
+                # Normalize whitespace for comparison
+                l3_norm = re.sub(r"\s+", " ", l3)
+                expected_norm = re.sub(r"\s+", " ", expected_prefix)
+                if l3_norm.startswith(expected_norm):
+                    drop += 2  # skip the standalone label + subtitle
+
+    return "\n".join(lines[drop:])
+
+
 def preprocess_text_for_speech(text: str) -> str:
     """Clean up extracted text for more natural TTS output.
 
@@ -499,9 +633,13 @@ def extract_text_from_pdf(file_stream, page_range_str: str) -> tuple[str, str]:
     total = len(reader.pages)
     indices = parse_page_range(page_range_str, total)
 
+    # Detect running headers across the whole document
+    header_patterns = _build_pdf_header_patterns(reader)
+
     parts: list[str] = []
     for i in indices:
         text = reader.pages[i].extract_text() or ""
+        text = _strip_page_headers(text, header_patterns)
         parts.append(text)
 
     raw = "\n".join(parts)
@@ -1689,17 +1827,12 @@ def api_pdf_info():
             file_stream.close()
 
 
-def _api_pdf_info_impl(file_stream, filename: str):
-    """PDF-specific page/chapter info extraction."""
-    reader = PdfReader(file_stream)
-    total = len(reader.pages)
-    pages = []
-    for i, page in enumerate(reader.pages):
-        txt = (page.extract_text() or "").strip()
-        pages.append({"page": i + 1, "has_text": len(txt) > 20, "chars": len(txt)})
+def _detect_pdf_chapters(reader) -> list[dict]:
+    """Detect chapters in a PDF using multiple strategies.
 
-    # --- Chapter / TOC detection ---
-    chapters = []
+    Returns a list of dicts: [{"title": str, "page": int (1-based), "depth": int}, ...]
+    """
+    chapters: list[dict] = []
 
     # 1) Try PDF outline (bookmarks)
     if reader.outline:
@@ -1720,7 +1853,6 @@ def _api_pdf_info_impl(file_stream, filename: str):
         _walk_outline(reader.outline)
 
     # 2) Detect "Book Title  |  Section Name" page headers
-    #    When the section part changes between pages, that's a chapter boundary.
     if not chapters:
         header_re = re.compile(r'^.{3,}\s*\|\s*(.+)$')
         chapter_label_re = re.compile(
@@ -1738,8 +1870,6 @@ def _api_pdf_info_impl(file_stream, filename: str):
                 if section != prev_section:
                     title = section
                     lines = txt.split("\n")[1:]
-                    # Find the chapter label line (e.g. "CHAPTER 8"),
-                    # skipping possible header continuation lines.
                     label_idx = None
                     for j, line in enumerate(lines):
                         if chapter_label_re.match(line.strip()):
@@ -1754,7 +1884,6 @@ def _api_pdf_info_impl(file_stream, filename: str):
                             if not sl_s:
                                 break
                             sl_norm = " ".join(sl_s.split()).upper()
-                            # Body text starts with a repeat of the label
                             if sl_norm.startswith(label_norm):
                                 break
                             subtitle_parts.append(sl_s)
@@ -1763,11 +1892,10 @@ def _api_pdf_info_impl(file_stream, filename: str):
                     prev_section = section
                     chapters.append({"title": title, "page": i + 1, "depth": 0})
 
-    # 3) Fallback: parse a "TABLE OF CONTENTS" page for entries, then
-    #    locate each entry in the document by scanning page text.
+    # 3) Parse a "TABLE OF CONTENTS" page
     if not chapters:
         toc_page_text = None
-        for i, page in enumerate(reader.pages[:20]):  # TOC is near the start
+        for i, page in enumerate(reader.pages[:20]):
             txt = (page.extract_text() or "").strip()
             if re.search(r'TABLE\s+OF\s+CONTENTS|CONTENTS', txt, re.IGNORECASE):
                 toc_page_text = txt
@@ -1780,7 +1908,6 @@ def _api_pdf_info_impl(file_stream, filename: str):
                 re.IGNORECASE | re.MULTILINE,
             )
             entries = [m.group(1).strip() for m in toc_entry_re.finditer(toc_page_text)]
-            # Also capture standalone entries like "Bibliography and Sources"
             standalone_re = re.compile(
                 r'^(Bibliography[\w\s]*)$', re.IGNORECASE | re.MULTILINE,
             )
@@ -1788,9 +1915,7 @@ def _api_pdf_info_impl(file_stream, filename: str):
                 val = m.group(1).strip()
                 if val not in entries:
                     entries.append(val)
-            # Match each entry to a page by searching text
             for entry in entries:
-                # Build a short search key from the entry
                 key = entry.split('\n')[0].strip()[:60]
                 for pi, page in enumerate(reader.pages):
                     txt = (page.extract_text() or "")[:500]
@@ -1798,7 +1923,7 @@ def _api_pdf_info_impl(file_stream, filename: str):
                         chapters.append({"title": entry, "page": pi + 1, "depth": 0})
                         break
 
-    # 4) Last fallback: heuristic scan for chapter headings in page text
+    # 4) Heuristic scan for chapter headings in page text
     if not chapters:
         chapter_re = re.compile(
             r'^(?:chapter|part|section|prologue|epilogue|introduction|conclusion)'
@@ -1810,6 +1935,20 @@ def _api_pdf_info_impl(file_stream, filename: str):
             first_line = txt.split("\n")[0].strip() if txt else ""
             if first_line and chapter_re.match(first_line):
                 chapters.append({"title": first_line, "page": i + 1, "depth": 0})
+
+    return chapters
+
+
+def _api_pdf_info_impl(file_stream, filename: str):
+    """PDF-specific page/chapter info extraction."""
+    reader = PdfReader(file_stream)
+    total = len(reader.pages)
+    pages = []
+    for i, page in enumerate(reader.pages):
+        txt = (page.extract_text() or "").strip()
+        pages.append({"page": i + 1, "has_text": len(txt) > 20, "chars": len(txt)})
+
+    chapters = _detect_pdf_chapters(reader)
 
     return jsonify({"total_pages": total, "pages": pages, "chapters": chapters})
 
@@ -1910,6 +2049,304 @@ def progress(job_id):
     return jsonify(info)
 
 
+# ---------------------------------------------------------------------------
+# Synthesis dispatch helpers (shared by single-file & chapter-mode convert)
+# ---------------------------------------------------------------------------
+
+def _collect_synth_params(backend: str, voice: str) -> dict:
+    """Read all backend-specific form parameters into a dict (call inside request context)."""
+    params: dict = {"backend": backend, "voice": voice}
+
+    def _float_or_none(key):
+        v = request.form.get(key, "").strip()
+        return float(v) if v else None
+
+    if backend == "polly":
+        params["voice_id"] = voice or CONFIG["POLLY_VOICE_ID"]
+        params["engine"] = request.form.get("engine", CONFIG["POLLY_ENGINE"])
+    elif backend == "piper":
+        params["model_path"] = voice or CONFIG["PIPER_MODEL"]
+        params["length_scale"] = _float_or_none("length_scale")
+        params["noise_scale"] = _float_or_none("noise_scale")
+        params["noise_w_scale"] = _float_or_none("noise_w_scale")
+        params["sentence_silence"] = _float_or_none("sentence_silence")
+    elif backend == "huggingface":
+        params["model_name"] = voice or CONFIG["HF_MODEL"]
+    elif backend == "kokoro":
+        params["voice_id"] = voice or CONFIG["KOKORO_VOICE"]
+        params["speed"] = float(request.form.get("kokoro_speed", CONFIG["KOKORO_SPEED"]))
+        params["lang_code"] = request.form.get("kokoro_lang", CONFIG["KOKORO_LANG"])
+    elif backend == "supertonic":
+        params["voice_id"] = voice or CONFIG["SUPERTONIC_VOICE"]
+        params["lang"] = request.form.get("supertonic_lang", CONFIG["SUPERTONIC_LANG"])
+        params["speed"] = float(request.form.get("supertonic_speed", CONFIG["SUPERTONIC_SPEED"]))
+        params["silence"] = float(request.form.get("supertonic_silence", CONFIG["SUPERTONIC_SILENCE"]))
+    elif backend in ("xtts", "xtts_ro"):
+        ref_audio = request.form.get("reference_audio", "").strip()
+        if not ref_audio:
+            raise ValueError("Voice cloning requires a reference audio file. Upload one first.")
+        ref_path = _REFERENCE_AUDIO_DIR / Path(ref_audio).name
+        if not ref_path.is_file():
+            raise ValueError(f"Reference audio not found: {ref_audio}")
+        params["ref_path"] = str(ref_path)
+        params["speed"] = float(request.form.get("xtts_speed", "1.0"))
+        if backend == "xtts":
+            params["xtts_lang"] = request.form.get("xtts_language", "en")
+    elif backend == "speecht5":
+        speaker_id = request.form.get("speecht5_speaker", "clb")
+        if speaker_id not in SPEECHT5_SPEAKERS:
+            speaker_id = "clb"
+        params["speaker_id"] = speaker_id
+    elif backend == "hf_cloud":
+        params["model_name"] = voice or CONFIG["HF_MODEL"]
+        params["hf_token"] = os.getenv("HF_TOKEN", "")
+    return params
+
+
+def _do_synthesis(text: str, backend: str, params: dict, on_progress=None) -> dict:
+    """Run TTS synthesis and return {mp3_buf, provider_detail, prosody_info, ...}.
+
+    Raises ValueError for user-facing validation errors, other exceptions bubble up.
+    """
+    prosody_info: dict = {}
+    provider_detail = "default"
+    polly_chars_billed = None
+    polly_cost_usd = None
+
+    if backend == "polly":
+        provider_detail = f"{params['voice_id']}_{params['engine']}"
+        mp3_buf, polly_chars_billed = synthesize_polly(
+            text, params["voice_id"], params["engine"], on_progress=on_progress)
+        rate = _POLLY_RATES.get(params["engine"].lower(), _POLLY_RATES["neural"])
+        polly_cost_usd = polly_chars_billed * rate / 1_000_000
+        prosody_info = {"engine": params["engine"]}
+
+    elif backend == "piper":
+        provider_detail = Path(params["model_path"]).name
+        mp3_buf = synthesize_piper(
+            text, params["model_path"],
+            length_scale=params["length_scale"],
+            noise_scale=params["noise_scale"],
+            noise_w_scale=params["noise_w_scale"],
+            sentence_silence=params["sentence_silence"],
+            on_progress=on_progress,
+        )
+        prosody_info = {
+            "ls": params["length_scale"], "ns": params["noise_scale"],
+            "nw": params["noise_w_scale"], "ss": params["sentence_silence"],
+        }
+
+    elif backend == "huggingface":
+        provider_detail = params["model_name"]
+        mp3_buf = synthesize_huggingface(text, params["model_name"], on_progress=on_progress)
+
+    elif backend == "kokoro":
+        provider_detail = params["voice_id"]
+        mp3_buf = synthesize_kokoro(
+            text, params["voice_id"], params["speed"], params["lang_code"],
+            on_progress=on_progress)
+        prosody_info = {"spd": params["speed"], "lang": params["lang_code"]}
+
+    elif backend == "supertonic":
+        provider_detail = params["voice_id"]
+        mp3_buf = synthesize_supertonic(
+            text, params["voice_id"], params["lang"],
+            speed=params["speed"], silence_duration=params["silence"],
+            on_progress=on_progress)
+        prosody_info = {"spd": params["speed"], "sil": params["silence"], "lang": params["lang"]}
+
+    elif backend == "xtts":
+        provider_detail = f"xtts-v2_{params['xtts_lang']}"
+        mp3_buf = synthesize_xtts(
+            text, params["xtts_lang"], params["ref_path"],
+            speed=params["speed"], on_progress=on_progress)
+        prosody_info = {"spd": params["speed"], "lang": params["xtts_lang"]}
+
+    elif backend == "xtts_ro":
+        provider_detail = "xtts-v2-romanian"
+        mp3_buf = synthesize_xtts_ro(
+            text, params["ref_path"], speed=params["speed"], on_progress=on_progress)
+        prosody_info = {"spd": params["speed"], "lang": "ro"}
+
+    elif backend == "speecht5":
+        provider_detail = f"speecht5_{params['speaker_id']}"
+        mp3_buf = synthesize_speecht5(text, params["speaker_id"], on_progress=on_progress)
+
+    elif backend == "hf_cloud":
+        provider_detail = f"hf-cloud_{params['model_name']}"
+        mp3_buf = synthesize_hf_cloud(
+            text, params["model_name"], params["hf_token"], on_progress=on_progress)
+
+    else:
+        raise ValueError(f"Unknown backend: {backend}")
+
+    result = {
+        "mp3_buf": mp3_buf,
+        "provider_detail": provider_detail,
+        "prosody_info": prosody_info,
+    }
+    if polly_chars_billed is not None:
+        result["polly_chars_billed"] = polly_chars_billed
+        result["polly_cost_usd"] = polly_cost_usd
+    return result
+
+
+def _convert_chapters(file_stream, source_filename, input_file_name,
+                      backend, voice, job_id, save_to_output, t0):
+    """Convert a PDF into one MP3 per chapter, returned as a ZIP."""
+    import zipfile as zf
+
+    file_ext = Path(source_filename).suffix.lower()
+    if file_ext != ".pdf":
+        return _err("Chapter mode is currently supported for PDF files only.")
+
+    _report_progress(job_id, 0, 1, phase="extracting")
+
+    try:
+        reader = PdfReader(file_stream)
+        total_pages = len(reader.pages)
+        chapters = _detect_pdf_chapters(reader)
+
+        if not chapters:
+            return _err(
+                "No chapters detected in this PDF. "
+                "Chapter mode requires detectable chapter boundaries."
+            )
+
+        # Build chapter segments: list of (title, start_page_0based, end_page_0based)
+        segments: list[tuple[str, int, int]] = []
+        # Pages before the first chapter → "Intro"
+        first_ch_page = chapters[0]["page"]  # 1-based
+        if first_ch_page > 1:
+            segments.append(("Intro", 0, first_ch_page - 2))
+
+        for idx, ch in enumerate(chapters):
+            start = ch["page"] - 1  # 0-based
+            if idx < len(chapters) - 1:
+                end = chapters[idx + 1]["page"] - 2  # page before next chapter
+            else:
+                end = total_pages - 1
+            segments.append((ch["title"], start, end))
+
+        # Extract all chapter texts upfront (pypdf reads pages lazily,
+        # so we must do this before closing the file stream)
+        header_patterns = _build_pdf_header_patterns(reader)
+        chapter_texts: list[tuple[str, str]] = []  # (title, preprocessed_text)
+        for title, start_pg, end_pg in segments:
+            parts = []
+            for pi in range(start_pg, end_pg + 1):
+                page_text = reader.pages[pi].extract_text() or ""
+                parts.append(_strip_page_headers(page_text, header_patterns))
+            raw = "\n".join(parts)
+            chapter_texts.append((title, preprocess_text_for_speech(raw)))
+    except Exception as e:
+        return _err(f"Failed to read PDF: {e}")
+    finally:
+        if input_file_name:
+            file_stream.close()
+
+    log.info("Chapter mode: %d segments detected", len(segments))
+    for i, (title, s, e) in enumerate(segments):
+        log.info("  [%d] p%d-p%d: %s", i, s + 1, e + 1, title)
+
+    # Collect synthesis params (while still in request context)
+    try:
+        synth_params = _collect_synth_params(backend, voice)
+    except ValueError as e:
+        _clear_job(job_id)
+        return _err(str(e))
+
+    # Synthesize each segment — write each MP3 to disk immediately so
+    # completed chapters survive even if a later chapter fails or the
+    # process crashes.  For save_to_output mode the files go straight
+    # to the final destination; for download mode they go to a temp dir
+    # that is ZIPped at the end.
+    book_slug = _slug_token(Path(source_filename).stem, max_len=60)
+    iso_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+
+    if save_to_output:
+        output_dir = Path(__file__).parent / "output"
+        chapter_dir = output_dir / f"{iso_ts}_{book_slug}_chapters"
+        chapter_dir.mkdir(parents=True, exist_ok=True)
+        work_dir = chapter_dir
+        tmp_obj = None  # nothing to clean up
+    else:
+        tmp_obj = tempfile.TemporaryDirectory(prefix="audiobook_chapters_")
+        work_dir = Path(tmp_obj.name)
+
+    mp3_count = 0
+    mp3_filenames: list[str] = []
+
+    try:
+        for seg_idx, (title, text) in enumerate(chapter_texts):
+            _report_progress(job_id, seg_idx, len(chapter_texts),
+                             phase="synthesizing")
+
+            if not text.strip():
+                log.info("  Skipping empty chapter: %s", title)
+                continue
+
+            log.info("  Synthesizing chapter %d/%d: %s (%d chars)",
+                     seg_idx + 1, len(chapter_texts), title, len(text))
+
+            try:
+                result = _do_synthesis(text, backend, synth_params,
+                                       on_progress=None)
+            except Exception as e:
+                log.exception("TTS failed for chapter: %s", title)
+                _clear_job(job_id)
+                return _err(f"TTS error on chapter '{title}': {e}", 500)
+
+            # Write chapter MP3 to disk immediately
+            ch_filename = f"{seg_idx:02d}_{_slug_token(title, max_len=80)}.mp3"
+            buf = result["mp3_buf"]
+            buf.seek(0)
+            (work_dir / ch_filename).write_bytes(buf.read())
+            del buf  # free memory right away
+            mp3_filenames.append(ch_filename)
+            mp3_count += 1
+            log.info("  Wrote %s (%d/%d)", ch_filename,
+                     mp3_count, len(chapter_texts))
+
+        if not mp3_count:
+            _clear_job(job_id)
+            return _err("No chapters produced any audio.")
+
+        elapsed = time.time() - t0
+        log.info("Chapter mode done in %.1fs — %d MP3s", elapsed, mp3_count)
+
+        if save_to_output:
+            _clear_job(job_id)
+            return jsonify({
+                "saved": True,
+                "filename": chapter_dir.name,
+                "path": str(chapter_dir),
+                "chapter_count": mp3_count,
+            })
+
+        # Download mode: ZIP from the temp files on disk
+        _report_progress(job_id, len(chapter_texts), len(chapter_texts),
+                         phase="encoding")
+        zip_buf = io.BytesIO()
+        with zf.ZipFile(zip_buf, "w", zf.ZIP_DEFLATED) as zipf:
+            for fname in mp3_filenames:
+                zipf.write(work_dir / fname, fname)
+        zip_buf.seek(0)
+
+        zip_filename = (f"{iso_ts}_{book_slug}_chapters_"
+                        f"{_slug_token(backend)}.zip")
+        _clear_job(job_id)
+        return send_file(
+            zip_buf,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=zip_filename,
+        )
+    finally:
+        if tmp_obj is not None:
+            tmp_obj.cleanup()
+
+
 @app.route("/convert", methods=["POST"])
 def convert():
     t0 = time.time()
@@ -1960,6 +2397,14 @@ def convert():
         save_to_output,
     )
 
+    # --- Chapter mode: one MP3 per chapter → ZIP ---
+    chapter_mode = request.form.get("chapter_mode") == "1"
+    if chapter_mode:
+        return _convert_chapters(
+            file_stream, source_filename, input_file_name,
+            backend, voice, job_id, save_to_output, t0,
+        )
+
     # --- Extract text ---
     _report_progress(job_id, 0, 1, phase="extracting")
     try:
@@ -1988,110 +2433,27 @@ def convert():
 
     log.info("Extracted text: %d chars from %s", len(text), label)
 
+    # --- Collect synthesis parameters from form (once) ---
+    synth_params = _collect_synth_params(backend, voice)
+
     # --- Synthesize ---
     _report_progress(job_id, 0, 1, phase="synthesizing")
     on_prog = lambda cur, tot: _report_progress(job_id, cur, tot, phase="synthesizing")
-    provider_detail = "default"
-    polly_chars_billed: int | None = None
-    polly_cost_usd: float | None = None
     try:
-        prosody_info: dict = {}
-
-        if backend == "polly":
-            voice_id = voice or CONFIG["POLLY_VOICE_ID"]
-            engine = request.form.get("engine", CONFIG["POLLY_ENGINE"])
-            provider_detail = f"{voice_id}_{engine}"
-            mp3_buf, polly_chars_billed = synthesize_polly(text, voice_id, engine, on_progress=on_prog)
-            rate = _POLLY_RATES.get(engine.lower(), _POLLY_RATES["neural"])
-            polly_cost_usd = polly_chars_billed * rate / 1_000_000
-            prosody_info = {"engine": engine}
-
-        elif backend == "piper":
-            model_path = voice or CONFIG["PIPER_MODEL"]
-            provider_detail = Path(model_path).name
-            # Read prosody overrides from the form (fall back to .env defaults)
-            def _float_or_none(key):
-                v = request.form.get(key, "").strip()
-                return float(v) if v else None
-            ls = _float_or_none("length_scale")
-            ns = _float_or_none("noise_scale")
-            nw = _float_or_none("noise_w_scale")
-            ss = _float_or_none("sentence_silence")
-            mp3_buf = synthesize_piper(
-                text,
-                model_path,
-                length_scale=ls,
-                noise_scale=ns,
-                noise_w_scale=nw,
-                sentence_silence=ss,
-                on_progress=on_prog,
-            )
-            prosody_info = {"ls": ls, "ns": ns, "nw": nw, "ss": ss}
-
-        elif backend == "huggingface":
-            model_name = voice or CONFIG["HF_MODEL"]
-            provider_detail = model_name
-            mp3_buf = synthesize_huggingface(text, model_name, on_progress=on_prog)
-
-        elif backend == "kokoro":
-            voice_id = voice or CONFIG["KOKORO_VOICE"]
-            speed = float(request.form.get("kokoro_speed", CONFIG["KOKORO_SPEED"]))
-            lang_code = request.form.get("kokoro_lang", CONFIG["KOKORO_LANG"])
-            provider_detail = f"{voice_id}"
-            mp3_buf = synthesize_kokoro(text, voice_id, speed, lang_code, on_progress=on_prog)
-            prosody_info = {"spd": speed, "lang": lang_code}
-
-        elif backend == "supertonic":
-            voice_id = voice or CONFIG["SUPERTONIC_VOICE"]
-            lang = request.form.get("supertonic_lang", CONFIG["SUPERTONIC_LANG"])
-            st_speed = float(request.form.get("supertonic_speed", CONFIG["SUPERTONIC_SPEED"]))
-            st_silence = float(request.form.get("supertonic_silence", CONFIG["SUPERTONIC_SILENCE"]))
-            provider_detail = f"{voice_id}"
-            mp3_buf = synthesize_supertonic(text, voice_id, lang, speed=st_speed, silence_duration=st_silence, on_progress=on_prog)
-            prosody_info = {"spd": st_speed, "sil": st_silence, "lang": lang}
-
-        elif backend == "xtts":
-            ref_audio = request.form.get("reference_audio", "").strip()
-            if not ref_audio:
-                return _err("Voice cloning requires a reference audio file. Upload one first.")
-            ref_path = _REFERENCE_AUDIO_DIR / Path(ref_audio).name
-            if not ref_path.is_file():
-                return _err(f"Reference audio not found: {ref_audio}")
-            xtts_lang = request.form.get("xtts_language", "en")
-            xtts_speed = float(request.form.get("xtts_speed", "1.0"))
-            provider_detail = f"xtts-v2_{xtts_lang}"
-            mp3_buf = synthesize_xtts(text, xtts_lang, str(ref_path), speed=xtts_speed, on_progress=on_prog)
-            prosody_info = {"spd": xtts_speed, "lang": xtts_lang}
-
-        elif backend == "xtts_ro":
-            ref_audio = request.form.get("reference_audio", "").strip()
-            if not ref_audio:
-                return _err("Voice cloning requires a reference audio file. Upload one first.")
-            ref_path = _REFERENCE_AUDIO_DIR / Path(ref_audio).name
-            if not ref_path.is_file():
-                return _err(f"Reference audio not found: {ref_audio}")
-            xtts_speed = float(request.form.get("xtts_speed", "1.0"))
-            provider_detail = "xtts-v2-romanian"
-            mp3_buf = synthesize_xtts_ro(text, str(ref_path), speed=xtts_speed, on_progress=on_prog)
-            prosody_info = {"spd": xtts_speed, "lang": "ro"}
-
-        elif backend == "speecht5":
-            speaker_id = request.form.get("speecht5_speaker", "clb")
-            if speaker_id not in SPEECHT5_SPEAKERS:
-                speaker_id = "clb"
-            provider_detail = f"speecht5_{speaker_id}"
-            mp3_buf = synthesize_speecht5(text, speaker_id, on_progress=on_prog)
-
-        elif backend == "hf_cloud":
-            model_name = voice or CONFIG["HF_MODEL"]
-            hf_token = os.getenv("HF_TOKEN", "")
-            provider_detail = f"hf-cloud_{model_name}"
-            mp3_buf = synthesize_hf_cloud(text, model_name, hf_token, on_progress=on_prog)
-
+        result = _do_synthesis(text, backend, synth_params, on_prog)
+    except ValueError as e:
+        _clear_job(job_id)
+        return _err(str(e))
     except Exception as e:
         log.exception("TTS synthesis failed")
         _clear_job(job_id)
         return _err(f"TTS error ({backend}): {e}", 500)
+
+    mp3_buf = result["mp3_buf"]
+    provider_detail = result["provider_detail"]
+    prosody_info = result["prosody_info"]
+    polly_chars_billed = result.get("polly_chars_billed")
+    polly_cost_usd = result.get("polly_cost_usd")
 
     _report_progress(job_id, 1, 1, phase="encoding")
     elapsed = time.time() - t0

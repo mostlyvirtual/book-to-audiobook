@@ -684,7 +684,7 @@
           <div>
             <label for="noise_scale">Variation</label>
             <input type="number" id="noise_scale" name="noise_scale"
-                   value="{{ config.PIPER_NOISE_SCALE }}" step="0.05" min="0" max="1.0">
+                   value="{{ config.PIPER_NOISE_SCALE }}" step="any" min="0" max="1.0">
             <span class="hint">Naturalness</span>
           </div>
         </div>
@@ -863,6 +863,14 @@
       <span class="hint">Requires HF_TOKEN in .env. Free tier is rate-limited.</span>
     </div>
 
+    <div class="toggle-row" id="chapterModeRow" style="display:none">
+      <label class="toggle">
+        <input type="checkbox" id="chapter_mode" name="chapter_mode" value="1">
+        <span class="slider"></span>
+      </label>
+      <label for="chapter_mode" style="margin:0;cursor:pointer">Split by chapter <span id="chapterModeHint" class="hint" style="display:inline;margin:0;font-size:.72rem"></span></label>
+    </div>
+
     <div class="toggle-row">
       <label class="toggle">
         <input type="checkbox" id="save_to_output" name="save_to_output" value="1">
@@ -871,8 +879,8 @@
       <label for="save_to_output" style="margin:0;cursor:pointer">Save to <code>output/</code> folder instead of downloading</label>
     </div>
 
-    <button type="submit">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;vertical-align:middle;margin-right:.4rem"><polygon points="5 3 19 12 5 21 5 3"/></svg>Convert to MP3
+    <button type="submit" id="convertBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;vertical-align:middle;margin-right:.4rem"><polygon points="5 3 19 12 5 21 5 3"/></svg><span id="convertBtnLabel">Convert to MP3</span>
     </button>
   </form>
 </div>
@@ -1032,10 +1040,27 @@
         pageRangeInput.value = el.dataset.range;
       });
     });
+
+    // Show/hide chapter mode toggle
+    const chapterRow = document.getElementById('chapterModeRow');
+    const chapterHint = document.getElementById('chapterModeHint');
+    if (chapters && chapters.length > 0) {
+      chapterRow.style.display = '';
+      chapterHint.textContent = `(${chapters.length} chapters detected → ZIP of MP3s)`;
+    } else {
+      chapterRow.style.display = 'none';
+      document.getElementById('chapter_mode').checked = false;
+    }
   }
 
   bookFileInput.addEventListener('change', fetchPageInfo);
   inputFileSel.addEventListener('change', fetchPageInfo);
+
+  // ---- Chapter mode toggle → update button label ----
+  document.getElementById('chapter_mode').addEventListener('change', function() {
+    document.getElementById('convertBtnLabel').textContent =
+      this.checked ? 'Convert chapters to ZIP' : 'Convert to MP3';
+  });
 
   // ---- Backend voice switching ----
   const backendSel  = document.getElementById('backend');
@@ -1337,6 +1362,10 @@
     }
     fd.set('voice', voiceVal);
 
+    // Chapter mode
+    const isChapterMode = document.getElementById('chapter_mode').checked;
+    if (isChapterMode) fd.set('chapter_mode', '1');
+
     // Generate a unique job ID for progress tracking
     const jobId = crypto.randomUUID();
     fd.set('job_id', jobId);
@@ -1359,8 +1388,10 @@
         } else if (p.phase === 'synthesizing' && p.total > 0) {
           const pct = Math.round((p.current / p.total) * 90) + 5; // 5-95%
           progressFill.style.width = pct + '%';
-          progressPhase.textContent = 'Synthesizing audio…';
-          progressLabel.textContent = `Chunk ${p.current} of ${p.total}`;
+          progressPhase.textContent = isChapterMode ? 'Synthesizing chapters…' : 'Synthesizing audio…';
+          progressLabel.textContent = isChapterMode
+            ? `Chapter ${p.current} of ${p.total}`
+            : `Chunk ${p.current} of ${p.total}`;
         } else if (p.phase === 'encoding') {
           progressFill.style.width = '95%';
           progressPhase.textContent = 'Encoding MP3…';
@@ -1392,8 +1423,9 @@
       if (ct.includes('application/json')) {
         const json = await resp.json();
         if (json.saved) {
+          const chExtra = json.chapter_count ? ` (${json.chapter_count} chapters)` : '';
           showResult({
-            title:    'Saved to output/',
+            title:    'Saved to output/' + chExtra,
             filename: json.filename,
             chars:    json.polly_chars_billed ?? null,
             costUsd:  json.polly_cost_usd    ?? null,
@@ -1406,7 +1438,8 @@
       const blob = await resp.blob();
       const cd   = resp.headers.get('Content-Disposition') || '';
       const match = cd.match(/filename="?([^"]+)"?/);
-      const fname = match ? match[1] : 'audiobook.mp3';
+      const defaultName = isChapterMode ? 'audiobook_chapters.zip' : 'audiobook.mp3';
+      const fname = match ? match[1] : defaultName;
 
       const url = URL.createObjectURL(blob);
       const a   = document.createElement('a');
@@ -1417,7 +1450,7 @@
       a.remove();
       URL.revokeObjectURL(url);
 
-      showResult({ title: 'Your MP3 is downloading', filename: fname, chars: null, costUsd: null });
+      showResult({ title: isChapterMode ? 'Your chapter ZIP is downloading' : 'Your MP3 is downloading', filename: fname, chars: null, costUsd: null });
 
     } catch (err) {
       clearInterval(pollTimer);
