@@ -4,38 +4,68 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Audiobook Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' fill='none'%3E%3Cpath d='M10 38V16c0-2 1-3 3-3h5c3 0 4 1 6 3 2-2 3-3 6-3h5c2 0 3 1 3 3v22' stroke='%23e94560' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M24 16v22' stroke='%23e94560' stroke-width='1.5' stroke-linecap='round' opacity='.4'/%3E%3Cpath d='M10 38c2-1 4-2 7-2 4 0 5 1 7 2 2-1 3-2 7-2 3 0 5 1 7 2' stroke='%23e94560' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M9 20a15 15 0 0 1 30 0' stroke='%23ff6b81' stroke-width='3' stroke-linecap='round'/%3E%3Crect x='4' y='20' width='7' height='12' rx='3' fill='%23ff6b81' opacity='.85'/%3E%3Crect x='37' y='20' width='7' height='12' rx='3' fill='%23ff6b81' opacity='.85'/%3E%3C/svg%3E">
   <style>
+    /* ============================================================
+       DESIGN SYSTEM — Audiobook Studio
+       Spacing:  4 · 8 · 12 · 16 · 20 · 24 · 32 · 40 · 48 · 64
+       Radii:    6 (sm) · 10 (md) · 14 (lg) · 50% (round)
+       Timing:   0.15s (micro) · 0.25s (std) · 0.35s (emphasis)
+       ============================================================ */
     :root {
-      --bg: #1a1a2e;
-      --surface: #16213e;
-      --surface2: #0f3460;
-      --accent: #e94560;
+      --bg:           #0c0e1a;
+      --surface:      #141726;
+      --surface2:     #1c2038;
+      --surface3:     #232840;
+      --border:       #252a3a;
+      --border-focus: #454c66;
+      --accent:       #e94560;
       --accent-hover: #ff6b81;
-      --text: #eee;
-      --text-muted: #aab;
-      --radius: 8px;
-      --shadow: 0 2px 12px rgba(0,0,0,.4);
-      --sidebar-w: 56px;
+      --accent-glow:  rgba(233,69,96,0.12);
+      --accent-dim:   rgba(233,69,96,0.06);
+      --success:      #34d399;
+      --success-dim:  rgba(52,211,153,0.10);
+      --warning:      #fbbf24;
+      --text:         #e2e4ea;
+      --text-muted:   #7c8298;
+      --text-dim:     #4a4f64;
+      --radius:       10px;
+      --radius-sm:    6px;
+      --radius-lg:    14px;
+      --shadow:       0 2px 16px rgba(0,0,0,.35);
+      --shadow-lg:    0 8px 32px rgba(0,0,0,.45);
+      --sidebar-w:    56px;
       --sidebar-expanded: 180px;
+      --font:         'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      --mono:         'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+      --step-dot:     32px;
+      --content-w:    620px;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
+    /* === Reset & Base === */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif;
+      font-family: var(--font);
+      font-size: 15px;
+      line-height: 1.55;
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
       display: flex;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
-    /* ===== Sidebar navigation ===== */
+    /* === Sidebar === */
     .sidebar {
       width: var(--sidebar-w);
       min-height: 100vh;
       background: var(--surface);
-      border-right: 1px solid #222;
+      border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -54,14 +84,12 @@
       gap: .5rem;
       padding: .55rem .8rem .7rem;
       width: 100%;
-      border-bottom: 1px solid #222;
+      border-bottom: 1px solid var(--border);
       margin-bottom: .5rem;
       white-space: nowrap;
       overflow: hidden;
     }
-    .sidebar .logo svg.logo-mark {
-      width: 28px; height: 28px; flex-shrink: 0;
-    }
+    .sidebar .logo svg.logo-mark { width: 28px; height: 28px; flex-shrink: 0; }
     .sidebar .logo .logo-text {
       font-size: .65rem;
       font-weight: 700;
@@ -88,197 +116,466 @@
       transition: background .15s, color .15s;
       white-space: nowrap;
     }
-    .nav-item:hover { background: rgba(255,255,255,.05); color: var(--text); }
-    .nav-item.active { color: var(--accent); background: rgba(233,69,96,.08); }
+    .nav-item:hover { background: rgba(255,255,255,.04); color: var(--text); }
+    .nav-item.active { color: var(--accent); background: var(--accent-dim); }
     .nav-item svg { width: 20px; height: 20px; flex-shrink: 0; }
     .nav-item span { opacity: 0; transition: opacity .15s; }
     .sidebar:hover .nav-item span { opacity: 1; }
 
-    /* ===== Main content area ===== */
+    /* === Layout === */
     .main {
       margin-left: var(--sidebar-w);
       flex: 1;
       display: flex;
       justify-content: center;
       align-items: flex-start;
-      padding: 3rem 1rem;
+      padding: 2.5rem 1rem 4rem;
       min-height: 100vh;
     }
-
-    .page { display: none; width: 100%; max-width: 540px; }
+    .page { display: none; width: 100%; max-width: var(--content-w); }
     .page.active { display: block; }
 
-    .card {
-      background: var(--surface);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      width: 100%;
-      padding: 2rem 2.2rem;
+    /* === Page header === */
+    .page-head { margin-bottom: 1.5rem; }
+    .page-head h1 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      margin-bottom: .15rem;
     }
-
-    h1 {
-      font-size: 1.5rem;
-      margin-bottom: .3rem;
-    }
-
-    .subtitle {
+    .page-head p {
+      font-size: .85rem;
       color: var(--text-muted);
-      font-size: .9rem;
-      margin-bottom: 1.8rem;
     }
 
-    /* Flash messages */
+    /* === Flash messages === */
     .flash {
       padding: .7rem 1rem;
-      border-radius: var(--radius);
-      margin-bottom: 1.2rem;
-      font-size: .9rem;
+      border-radius: var(--radius-sm);
+      margin-bottom: 1rem;
+      font-size: .88rem;
+      line-height: 1.4;
     }
-    .flash.error   { background: #5c1a2a; border-left: 4px solid var(--accent); }
-    .flash.success { background: #1a3c2a; border-left: 4px solid #2ecc71; }
+    .flash.error   { background: #2a1020; border-left: 3px solid var(--accent); color: #f0a0a8; }
+    .flash.success { background: #0f2a1e; border-left: 3px solid var(--success); color: #80e8b8; }
+    .flash.info    { background: var(--surface2); border-left: 3px solid #60a5fa; color: #93c5fd; }
 
-    /* Result card (shown after successful conversion) */
+    /* === Result card === */
     .result-card {
-      background: #1a3c2a;
-      border: 1px solid #2ecc71;
+      background: #0f2a1e;
+      border: 1px solid rgba(52,211,153,0.25);
       border-radius: var(--radius);
       padding: 1rem 1.2rem;
       margin-bottom: 1.2rem;
-      animation: fadeSlideIn .25s ease;
+      animation: fadeSlideIn .3s ease;
     }
     @keyframes fadeSlideIn {
-      from { opacity: 0; transform: translateY(-6px); }
+      from { opacity: 0; transform: translateY(-8px); }
       to   { opacity: 1; transform: translateY(0); }
     }
     .result-header {
-      display: flex;
-      align-items: center;
-      gap: .5rem;
-      font-weight: 600;
-      color: #2ecc71;
-      margin-bottom: .55rem;
+      display: flex; align-items: center; gap: .5rem;
+      font-weight: 600; color: var(--success); margin-bottom: .5rem; font-size: .95rem;
     }
     .result-icon { font-size: 1.1rem; }
     .result-filename {
-      font-family: ui-monospace, "SF Mono", Menlo, monospace;
-      font-size: .75rem;
+      font-family: var(--mono);
+      font-size: .72rem;
       color: var(--text-muted);
       word-break: break-all;
       line-height: 1.4;
-      margin-bottom: .1rem;
     }
     .result-stats {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: .5rem;
-      margin-top: .75rem;
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: .5rem; margin-top: .75rem;
     }
     .stat {
       background: rgba(0,0,0,.25);
-      border-radius: calc(var(--radius) - 2px);
+      border-radius: var(--radius-sm);
       padding: .5rem .75rem;
     }
     .stat-label {
-      display: block;
-      font-size: .67rem;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: .06em;
-      margin-bottom: .25rem;
+      display: block; font-size: .65rem; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: .2rem;
     }
-    .stat-value {
-      font-size: 1.05rem;
-      font-weight: 700;
-      color: var(--text);
+    .stat-value { font-size: 1rem; font-weight: 700; color: var(--text); }
+
+    /* ============================================================
+       WIZARD — Vertical Stepper
+       ============================================================ */
+    .wizard { display: flex; flex-direction: column; }
+
+    .step {
+      display: flex;
+      gap: 16px;
+      position: relative;
     }
 
-    /* Form elements */
+    /* Left rail: dot + connector */
+    .step-rail {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: var(--step-dot);
+      flex-shrink: 0;
+      padding-top: 2px;
+    }
+    .step-dot {
+      width: var(--step-dot); height: var(--step-dot);
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      display: flex;
+      align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700;
+      color: var(--text-dim);
+      flex-shrink: 0;
+      z-index: 1;
+      transition: all .25s;
+    }
+    .step-dot svg { width: 14px; height: 14px; }
+    .step-connector {
+      flex: 1;
+      width: 2px;
+      background: var(--border);
+      min-height: 8px;
+      transition: background .25s;
+    }
+    .step:last-child .step-connector { display: none; }
+
+    /* Dot states */
+    .step.expanded .step-dot {
+      border-color: var(--accent);
+      color: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-glow);
+    }
+    .step.filled .step-dot {
+      border-color: var(--success);
+      background: var(--success);
+      color: #0c0e1a;
+    }
+    .step.filled .step-connector { background: rgba(52,211,153,0.3); }
+
+    /* Right side: content */
+    .step-content { flex: 1; min-width: 0; padding-bottom: 8px; }
+
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      min-height: var(--step-dot);
+      padding: 2px 0;
+      user-select: none;
+    }
+    .step-label {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      transition: color .15s;
+      white-space: nowrap;
+    }
+    .step.expanded .step-label { color: var(--text); }
+    .step.filled .step-label { color: var(--text-muted); }
+
+    .step-hint {
+      flex: 1;
+      text-align: right;
+      font-size: 12px;
+      font-family: var(--mono);
+      color: var(--text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      opacity: 0;
+      transition: opacity .2s;
+      pointer-events: none;
+    }
+    .step.collapsed .step-hint { opacity: 1; }
+
+    .step-chevron {
+      width: 16px; height: 16px;
+      color: var(--text-dim);
+      transition: transform .25s cubic-bezier(.4,0,.2,1);
+      flex-shrink: 0;
+    }
+    .step.collapsed .step-chevron { transform: rotate(-90deg); }
+
+    /* Panel animation (grid technique) */
+    .step-panel {
+      display: grid;
+      grid-template-rows: 1fr;
+      transition: grid-template-rows .3s cubic-bezier(.4,0,.2,1);
+    }
+    .step.collapsed .step-panel { grid-template-rows: 0fr; }
+    .step-panel-inner {
+      overflow: hidden;
+      padding-top: 12px;
+    }
+    .step.collapsed .step-panel-inner { padding-top: 0; }
+
+    /* ============================================================
+       FORM CONTROLS
+       ============================================================ */
     label {
       display: block;
-      font-size: .85rem;
+      font-size: .8rem;
+      font-weight: 600;
       color: var(--text-muted);
       margin-bottom: .3rem;
-      margin-top: 1rem;
+      margin-top: .9rem;
+      letter-spacing: .01em;
     }
-
-    label:first-of-type { margin-top: 0; }
+    label:first-child { margin-top: 0; }
 
     input[type="file"],
     input[type="text"],
     input[type="number"],
     select {
       width: 100%;
-      padding: .6rem .8rem;
+      padding: .55rem .75rem;
       background: var(--bg);
       color: var(--text);
-      border: 1px solid #334;
-      border-radius: var(--radius);
-      font-size: .95rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-family: var(--font);
+      font-size: .9rem;
       outline: none;
-      transition: border-color .2s;
+      transition: border-color .15s, box-shadow .15s;
     }
-
     input:focus, select:focus {
       border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    input[type="file"] { padding: .4rem .6rem; cursor: pointer; }
+
+    .hint {
+      display: block;
+      font-size: .72rem;
+      color: var(--text-dim);
+      margin-top: .2rem;
+      line-height: 1.4;
     }
 
-    input[type="file"] {
-      padding: .45rem .6rem;
-      cursor: pointer;
-    }
-
-    .row {
-      display: flex;
-      gap: .8rem;
-    }
+    .row { display: flex; gap: .75rem; }
     .row > * { flex: 1; }
-
-    /* Voice section — changes dynamically */
-    .voice-section { margin-top: 1rem; }
-
-    details {
-      margin-top: .8rem;
-      border: 1px solid #334;
-      border-radius: var(--radius);
-      padding: .5rem .8rem;
-    }
-    details summary {
-      cursor: pointer;
-      font-size: .85rem;
-      color: var(--text-muted);
-      user-select: none;
-    }
-    details[open] summary { margin-bottom: .5rem; }
-
     .row-3 { display: flex; gap: .6rem; }
     .row-3 > * { flex: 1; min-width: 0; }
 
-    /* Toggle switch for save-to-output */
-    .toggle-row {
+    details {
+      margin-top: .75rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: .5rem .75rem;
+    }
+    details summary {
+      cursor: pointer;
+      font-size: .8rem;
+      color: var(--text-muted);
+      user-select: none;
+      font-weight: 500;
+    }
+    details[open] summary { margin-bottom: .5rem; }
+
+    /* === Source tabs === */
+    .source-tabs { display: flex; gap: 0; margin-bottom: .65rem; }
+    .source-tab {
+      flex: 1;
+      padding: .45rem .5rem;
+      text-align: center;
+      font-size: .78rem;
+      font-weight: 600;
+      background: var(--bg);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .source-tab:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+    .source-tab:last-child  { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+    .source-tab:hover { color: var(--text-muted); }
+    .source-tab.active {
+      background: var(--surface2);
+      color: var(--text);
+      border-color: var(--accent);
+    }
+
+    /* === Backend status badge === */
+    .backend-status {
+      display: inline-flex;
+      align-items: center;
+      gap: .3rem;
+      font-size: .7rem;
+      margin-top: .3rem;
+      padding: .15rem .5rem;
+      border-radius: 10px;
+      background: rgba(0,0,0,.18);
+      font-weight: 500;
+    }
+    .status-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-dot.ready   { background: var(--success); }
+    .status-dot.pending  { background: var(--warning); }
+    .status-dot.unknown  { background: #555; }
+
+    /* === Language filter pills === */
+    .backend-label-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .4rem; }
+    .backend-label-row label { margin: 0; white-space: nowrap; }
+    .lang-bar { display: flex; gap: .2rem; margin-left: auto; }
+    .lang-btn {
+      padding: .15rem .5rem; border-radius: 999px;
+      border: 1px solid var(--border);
+      background: transparent; color: var(--text-dim);
+      cursor: pointer; font-size: .68rem; font-weight: 600;
+      font-family: var(--font);
+      transition: all .15s; line-height: 1.2;
+    }
+    .lang-btn:hover { border-color: var(--text-dim); color: var(--text-muted); }
+    .lang-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    /* === Voice section wrapper === */
+    .voice-section { margin-top: .75rem; }
+
+    /* === Page info card === */
+    .page-info {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: .7rem .85rem;
+      margin-top: .6rem;
+      font-size: .78rem;
+      color: var(--text-muted);
+    }
+    .page-info.visible { display: block; }
+    .page-info.skeleton {
+      display: block; min-height: 50px;
+      position: relative; overflow: hidden;
+    }
+    .page-info.skeleton::after {
+      content: '';
+      position: absolute; inset: 0;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.03) 50%, transparent 100%);
+      animation: shimmer 1.5s infinite;
+    }
+    .skeleton-lines { display: flex; flex-direction: column; gap: .35rem; }
+    .skeleton-line { height: .6rem; border-radius: 3px; background: var(--border); }
+    .skeleton-line.w60 { width: 60%; }
+    .skeleton-line.w40 { width: 40%; }
+    .skeleton-line.w80 { width: 80%; }
+    @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+    .page-info .stats { display: flex; gap: .75rem; flex-wrap: wrap; margin-bottom: .4rem; }
+    .page-info .stat { white-space: nowrap; background: none; padding: 0; }
+    .page-info .text-pages { color: var(--success); }
+    .page-info .blank-pages { color: var(--accent); }
+    .page-info .suggest-range { color: var(--accent); text-decoration: underline; cursor: pointer; }
+
+    .chapter-list {
+      margin-top: .5rem; padding-top: .5rem;
+      border-top: 1px solid var(--border);
+      max-height: 170px; overflow-y: auto;
+    }
+    .chapter-list::-webkit-scrollbar { width: 4px; }
+    .chapter-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .chapter-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: .22rem 0; font-size: .76rem;
+      cursor: pointer; transition: color .15s;
+    }
+    .chapter-item:hover { color: var(--text); }
+    .chapter-item .ch-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chapter-item .ch-page { flex-shrink: 0; margin-left: .6rem; color: var(--accent); font-variant-numeric: tabular-nums; }
+    .chapter-item.depth-1 { padding-left: 1rem; font-size: .72rem; }
+
+    /* ============================================================
+       REVIEW CARD
+       ============================================================ */
+    .review-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.4rem 1.5rem 1.5rem;
+      margin-top: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+    .review-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--accent), var(--accent-hover), var(--accent));
+    }
+    .review-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 1rem;
       display: flex;
       align-items: center;
-      gap: .6rem;
-      margin-top: 1rem;
+      gap: .5rem;
     }
-    .toggle-row label { margin: 0; }
+    .review-title svg { width: 16px; height: 16px; color: var(--accent); }
+
+    .review-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: .4rem 1rem;
+      margin-bottom: 1.2rem;
+      font-size: .82rem;
+    }
+    .review-key {
+      color: var(--text-dim);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .review-val {
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: .78rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .review-val.empty { color: var(--text-dim); font-style: italic; font-family: var(--font); }
+
+    .review-divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 1rem 0;
+    }
+
+    /* === Toggles === */
+    .toggle-row {
+      display: flex; align-items: center; gap: .6rem;
+      margin-top: .75rem;
+    }
+    .toggle-row label { margin: 0; font-weight: 500; font-size: .82rem; }
     .toggle {
       position: relative;
-      width: 40px;
-      height: 22px;
+      width: 38px; height: 20px;
       flex-shrink: 0;
     }
     .toggle input { opacity: 0; width: 0; height: 0; }
     .toggle .slider {
       position: absolute; inset: 0;
-      background: #334;
-      border-radius: 11px;
+      background: var(--border);
+      border-radius: 10px;
       cursor: pointer;
       transition: background .2s;
     }
     .toggle .slider::before {
       content: '';
       position: absolute;
-      width: 16px; height: 16px;
+      width: 14px; height: 14px;
       left: 3px; bottom: 3px;
       background: var(--text);
       border-radius: 50%;
@@ -287,209 +584,88 @@
     .toggle input:checked + .slider { background: var(--accent); }
     .toggle input:checked + .slider::before { transform: translateX(18px); }
 
-    /* Page info card */
-    .page-info {
-      display: none;
-      background: var(--bg);
-      border: 1px solid #334;
-      border-radius: var(--radius);
-      padding: .7rem .9rem;
-      margin-top: .6rem;
-      font-size: .8rem;
-      color: var(--text-muted);
-    }
-    .page-info.visible { display: block; }
-    .page-info.skeleton {
-      display: block;
-      min-height: 52px;
-      position: relative;
-      overflow: hidden;
-    }
-    .page-info.skeleton::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.04) 50%, transparent 100%);
-      animation: shimmer 1.5s infinite;
-    }
-    .skeleton-lines { display: flex; flex-direction: column; gap: .4rem; }
-    .skeleton-line {
-      height: .65rem;
-      border-radius: 3px;
-      background: #334;
-    }
-    .skeleton-line.w60 { width: 60%; }
-    .skeleton-line.w40 { width: 40%; }
-    .skeleton-line.w80 { width: 80%; }
-    @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
-    .page-info .stats {
-      display: flex;
-      gap: .8rem;
-      flex-wrap: wrap;
-      margin-bottom: .4rem;
-    }
-    .page-info .stat { white-space: nowrap; }
-    .page-info .text-pages { color: #2ecc71; }
-    .page-info .blank-pages { color: var(--accent); }
-    .page-info .suggest-range {
-      color: var(--accent);
-      text-decoration: underline;
-      cursor: pointer;
-    }
-    .chapter-list {
-      margin-top: .5rem;
-      padding-top: .5rem;
-      border-top: 1px solid #334;
-      max-height: 180px;
-      overflow-y: auto;
-    }
-    .chapter-list::-webkit-scrollbar { width: 4px; }
-    .chapter-list::-webkit-scrollbar-thumb { background: #334; border-radius: 2px; }
-    .chapter-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: .25rem 0;
-      font-size: .78rem;
-      cursor: pointer;
-      transition: color .15s;
-    }
-    .chapter-item:hover { color: var(--text); }
-    .chapter-item .ch-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .chapter-item .ch-page {
-      flex-shrink: 0;
-      margin-left: .6rem;
-      color: var(--accent);
-      font-variant-numeric: tabular-nums;
-    }
-    .chapter-item.depth-1 { padding-left: 1rem; font-size: .74rem; }
-
-    /* Book source tabs */
-    .source-tabs {
-      display: flex;
-      gap: 0;
-      margin-bottom: .6rem;
-    }
-    .source-tab {
-      flex: 1;
-      padding: .45rem .5rem;
-      text-align: center;
-      font-size: .8rem;
-      background: var(--bg);
-      color: var(--text-muted);
-      border: 1px solid #334;
-      cursor: pointer;
-      transition: all .2s;
-    }
-    .source-tab:first-child { border-radius: var(--radius) 0 0 var(--radius); }
-    .source-tab:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
-    .source-tab.active {
-      background: var(--surface2);
-      color: var(--text);
-      border-color: var(--accent);
-    }
-
-    /* Model status badge */
-    .backend-status {
-      display: inline-flex;
-      align-items: center;
-      gap: .3rem;
-      font-size: .72rem;
-      margin-top: .3rem;
-      padding: .2rem .55rem;
-      border-radius: 10px;
-      background: rgba(0,0,0,.2);
-    }
-    .status-dot {
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .status-dot.ready { background: #2ecc71; }
-    .status-dot.pending { background: #f39c12; }
-    .status-dot.unknown { background: #555; }
-
-    button {
-      margin-top: 1.6rem;
+    /* === Primary button === */
+    .btn-convert {
+      margin-top: 1.2rem;
       width: 100%;
-      padding: .75rem;
+      padding: .7rem;
       background: var(--accent);
       color: #fff;
       border: none;
       border-radius: var(--radius);
-      font-size: 1rem;
-      font-weight: 600;
+      font-family: var(--font);
+      font-size: .95rem;
+      font-weight: 700;
       cursor: pointer;
-      transition: background .2s;
+      transition: background .15s, box-shadow .15s, transform .1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: .45rem;
+      letter-spacing: .01em;
     }
-    button:hover { background: var(--accent-hover); }
-
-    .hint {
-      display: block;
-      font-size: .75rem;
-      color: var(--text-muted);
-      margin-top: .2rem;
+    .btn-convert:hover {
+      background: var(--accent-hover);
+      box-shadow: 0 4px 20px rgba(233,69,96,0.3);
     }
+    .btn-convert:active { transform: scale(.985); }
+    .btn-convert svg { width: 18px; height: 18px; }
 
-    /* Spinner overlay */
+    /* === Overlay / Spinner === */
     .overlay {
       display: none;
       position: fixed; inset: 0;
-      background: rgba(0,0,0,.6);
-      justify-content: center;
-      align-items: center;
+      background: rgba(0,0,0,.65);
+      backdrop-filter: blur(4px);
+      justify-content: center; align-items: center;
       z-index: 999;
     }
     .overlay.active { display: flex; }
     .spinner-box {
       background: var(--surface);
-      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
       padding: 2rem 2.5rem;
       text-align: center;
-      box-shadow: var(--shadow);
+      box-shadow: var(--shadow-lg);
       min-width: 320px;
     }
     .spinner {
-      width: 40px; height: 40px;
+      width: 36px; height: 36px;
       margin: 0 auto 1rem;
-      border: 4px solid #334;
+      border: 3px solid var(--border);
       border-top-color: var(--accent);
       border-radius: 50%;
       animation: spin .8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     .progress-track {
-      width: 100%;
-      height: 6px;
-      background: #334;
+      width: 100%; height: 5px;
+      background: var(--border);
       border-radius: 3px;
-      margin: 1rem 0 .6rem;
+      margin: .8rem 0 .5rem;
       overflow: hidden;
     }
     .progress-fill {
-      height: 100%;
-      width: 0%;
+      height: 100%; width: 0%;
       background: var(--accent);
       border-radius: 3px;
       transition: width .3s ease;
     }
-    .progress-label {
-      font-size: .8rem;
-      color: var(--text-muted);
-    }
+    .progress-label { font-size: .78rem; color: var(--text-muted); }
 
-    /* Voice cloning page */
-    .cloning-placeholder {
-      text-align: center;
-      padding: 3rem 1.5rem;
-      color: var(--text-muted);
+    /* === Voice Cloning page === */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.8rem 2rem;
     }
-    .cloning-placeholder svg { width: 64px; height: 64px; margin-bottom: 1rem; opacity: .4; }
-    .cloning-placeholder p { margin-top: .5rem; font-size: .85rem; }
+    .card h1 { font-size: 1.2rem; font-weight: 700; margin-bottom: .15rem; }
+    .card .subtitle { font-size: .82rem; color: var(--text-muted); margin-bottom: 1.4rem; }
 
-    /* Reference audio */
     .ref-upload-zone {
-      border: 2px dashed #334;
+      border: 2px dashed var(--border);
       border-radius: var(--radius);
       padding: 1.5rem;
       text-align: center;
@@ -499,35 +675,23 @@
     }
     .ref-upload-zone:hover, .ref-upload-zone.dragover {
       border-color: var(--accent);
-      background: rgba(99, 102, 241, 0.05);
+      background: var(--accent-dim);
     }
-    .ref-upload-zone svg.ref-mic { width: 48px; height: 48px; opacity: .5; margin-bottom: .25rem; display: block; margin-left: auto; margin-right: auto; }
-    .ref-upload-zone svg.ref-upload-arrow { width: 20px; height: 20px; opacity: .3; margin-bottom: .5rem; }
-    .ref-upload-zone p { font-size: .85rem; color: var(--text-muted); margin: .3rem 0 0; }
+    .ref-upload-zone svg.ref-mic { width: 44px; height: 44px; opacity: .4; margin-bottom: .2rem; display: block; margin-left: auto; margin-right: auto; }
+    .ref-upload-zone svg.ref-upload-arrow { width: 18px; height: 18px; opacity: .3; margin-bottom: .4rem; }
+    .ref-upload-zone p { font-size: .82rem; color: var(--text-muted); margin: .2rem 0 0; }
 
     .ref-list { display: flex; flex-direction: column; gap: .5rem; margin-bottom: 1rem; }
     .ref-item {
       display: flex; align-items: center; gap: .75rem;
-      background: var(--bg); padding: .6rem .8rem; border-radius: var(--radius);
-      cursor: pointer; border: 2px solid transparent; transition: border-color .2s;
+      background: var(--bg); padding: .55rem .75rem; border-radius: var(--radius-sm);
+      cursor: pointer; border: 2px solid transparent; transition: border-color .15s;
     }
-    .ref-item:hover { border-color: #555; }
+    .ref-item:hover { border-color: var(--border-focus); }
     .ref-item.selected { border-color: var(--accent); }
     .ref-item audio { height: 28px; flex-shrink: 0; }
-    .ref-item .ref-name { flex: 1; font-size: .85rem; }
-    .ref-item .ref-dur { font-size: .75rem; color: var(--text-muted); }
-
-    /* Language selector — compact pills inline with label */
-    .backend-label-row { display: flex; align-items: center; gap: .75rem; margin-bottom: .5rem; }
-    .backend-label-row label { margin: 0; white-space: nowrap; }
-    .lang-bar { display: flex; gap: .25rem; margin-left: auto; }
-    .lang-btn {
-      padding: .2rem .55rem; border-radius: 999px; border: 1px solid #334;
-      background: transparent; color: var(--text-muted); cursor: pointer; font-size: .7rem;
-      transition: all .15s; line-height: 1.2;
-    }
-    .lang-btn:hover { border-color: var(--text-muted); color: var(--text); }
-    .lang-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .ref-item .ref-name { flex: 1; font-size: .82rem; }
+    .ref-item .ref-dur { font-size: .72rem; color: var(--text-muted); }
   </style>
 </head>
 <body>
@@ -536,15 +700,11 @@
 <nav class="sidebar">
   <div class="logo">
     <svg class="logo-mark" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <!-- open book -->
       <path d="M10 38V16c0-2 1-3 3-3h5c3 0 4 1 6 3 2-2 3-3 6-3h5c2 0 3 1 3 3v22" stroke="#e94560" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       <path d="M24 16v22" stroke="#e94560" stroke-width="1.5" stroke-linecap="round" opacity=".4"/>
       <path d="M10 38c2-1 4-2 7-2 4 0 5 1 7 2 2-1 3-2 7-2 3 0 5 1 7 2" stroke="#e94560" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      <!-- headphone band -->
       <path d="M9 20a15 15 0 0 1 30 0" stroke="#ff6b81" stroke-width="3" stroke-linecap="round" fill="none"/>
-      <!-- left ear cup -->
       <rect x="4" y="20" width="7" height="12" rx="3" fill="#ff6b81" opacity=".85"/>
-      <!-- right ear cup -->
       <rect x="37" y="20" width="7" height="12" rx="3" fill="#ff6b81" opacity=".85"/>
     </svg>
     <span class="logo-text">Audiobook<br>Studio</span>
@@ -559,26 +719,24 @@
   </a>
 </nav>
 
-<!-- ===== Main content ===== -->
+<!-- ===== Main ===== -->
 <div class="main">
 
 <!-- ========== PAGE: Convert ========== -->
 <section id="page-convert" class="page active">
-<div class="card">
-  <h1>Book &rarr; Audiobook</h1>
-  <p class="subtitle">Upload a PDF or EPUB, pick pages and a voice, get an MP3.</p>
+  <div class="page-head">
+    <h1>Book &rarr; Audiobook</h1>
+    <p>Upload a book, choose a voice, get an MP3.</p>
+  </div>
 
-  <!-- Flash messages (server-side, for direct navigation) -->
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for cat, msg in messages %}
       <div class="flash {{ cat }}">{{ msg }}</div>
     {% endfor %}
   {% endwith %}
 
-  <!-- Inline status area (JS-driven, errors only) -->
   <div id="status" class="flash error" style="display:none"></div>
 
-  <!-- Result card (shown on successful conversion) -->
   <div id="result-card" class="result-card" style="display:none">
     <div class="result-header">
       <span class="result-icon">&#10003;</span>
@@ -588,323 +746,399 @@
     <div class="result-stats" id="result-stats" style="display:none">
       <div class="stat">
         <span class="stat-label">Characters billed</span>
-        <span class="stat-value" id="stat-chars">—</span>
+        <span class="stat-value" id="stat-chars">&mdash;</span>
       </div>
       <div class="stat">
         <span class="stat-label">Estimated cost</span>
-        <span class="stat-value" id="stat-cost">—</span>
+        <span class="stat-value" id="stat-cost">&mdash;</span>
       </div>
     </div>
   </div>
 
   <form method="post" action="/convert" enctype="multipart/form-data" id="convertForm">
 
-    <label>Book source</label>
-    <div class="source-tabs">
-      <div class="source-tab active" data-source="upload">Upload file</div>
-      <div class="source-tab" data-source="input">Input folder{% if input_books %} ({{ input_books|length }}){% endif %}</div>
-    </div>
+    <div class="wizard">
 
-    <div id="source-upload">
-      <input type="file" id="bookFile" name="pdf" accept=".pdf,.epub">
-    </div>
+      <!-- ======= STEP 1 — Source ======= -->
+      <div class="step expanded" data-step="1" id="step-source">
+        <div class="step-rail">
+          <div class="step-dot">1</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-header" onclick="toggleStep(1)">
+            <span class="step-label">Source</span>
+            <span class="step-hint" id="sum-source">No file selected</span>
+            <svg class="step-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+          </div>
+          <div class="step-panel">
+            <div class="step-panel-inner">
 
-    <div id="source-input" style="display:none">
-      <select id="input_file" name="input_file">
-        <option value="">— select a file from input/ —</option>
-        {% for f in input_books %}
-          <option value="{{ f }}">{{ f }}</option>
-        {% endfor %}
-      </select>
-      <span class="hint" style="margin-bottom:.6rem">Place PDFs or EPUBs in the <code>input/</code> folder and they appear here.</span>
-    </div>
-    <input type="hidden" id="book_source" name="book_source" value="upload">
+              <label>Book source</label>
+              <div class="source-tabs">
+                <div class="source-tab active" data-source="upload">Upload file</div>
+                <div class="source-tab" data-source="input">Input folder{% if input_books %} ({{ input_books|length }}){% endif %}</div>
+              </div>
 
-    <div class="row">
-      <div>
-        <label for="page_range">Pages</label>
-        <input type="text" id="page_range" name="page_range" value="all" placeholder='e.g. "all", "1-10", "5"'>
-      </div>
-      <div>
-        <div class="backend-label-row">
-          <label for="backend">TTS backend</label>
-          <div class="lang-bar" id="langBar">
-            <button type="button" class="lang-btn active" data-lang="all">All</button>
-            <button type="button" class="lang-btn" data-lang="en">EN</button>
-            <button type="button" class="lang-btn" data-lang="ro">RO</button>
+              <div id="source-upload">
+                <input type="file" id="bookFile" name="pdf" accept=".pdf,.epub">
+              </div>
+
+              <div id="source-input" style="display:none">
+                <select id="input_file" name="input_file">
+                  <option value="">&mdash; select a file from input/ &mdash;</option>
+                  {% for f in input_books %}
+                    <option value="{{ f }}">{{ f }}</option>
+                  {% endfor %}
+                </select>
+                <span class="hint">Place PDFs or EPUBs in the <code>input/</code> folder.</span>
+              </div>
+              <input type="hidden" id="book_source" name="book_source" value="upload">
+
+            </div>
           </div>
         </div>
-        <select id="backend" name="backend">
-          <optgroup label="Local">
-            <option value="piper" data-langs="en" {% if config.DEFAULT_BACKEND == 'piper' %}selected{% endif %}>Piper</option>
-            <option value="kokoro" data-langs="en" {% if config.DEFAULT_BACKEND == 'kokoro' %}selected{% endif %}>Kokoro</option>
-            <option value="supertonic" data-langs="en" {% if config.DEFAULT_BACKEND == 'supertonic' %}selected{% endif %}>Supertonic</option>
-            <option value="huggingface" data-langs="en,ro" {% if config.DEFAULT_BACKEND == 'huggingface' %}selected{% endif %}>Hugging Face</option>
-            <option value="speecht5" data-langs="en">SpeechT5 (multi-speaker)</option>
-          </optgroup>
-          <optgroup label="Voice Cloning">
-            <option value="xtts" data-langs="en">XTTS-v2 (English)</option>
-            <option value="xtts_ro" data-langs="ro">XTTS-v2 (Romanian)</option>
-          </optgroup>
-          <optgroup label="Cloud">
-            <option value="hf_cloud" data-langs="en,ro">HF Inference API</option>
-            <option value="polly" data-langs="en" {% if config.DEFAULT_BACKEND == 'polly' %}selected{% endif %}>Amazon Polly</option>
-          </optgroup>
-        </select>
-        <div class="backend-status" id="backendStatus"><span class="status-dot unknown"></span> <span id="backendStatusText">Checking…</span></div>
       </div>
-    </div>
-    <div class="page-info" id="pageInfo"></div>
 
-    <!-- ===== Piper voice + prosody ===== -->
-    <div class="voice-section" id="voice-piper">
-      <label for="voice_piper">Piper model</label>
-      <select id="voice_piper" name="voice_piper">
-        {% for m in onnx_models %}
-          <option value="{{ m }}" {% if m == config.PIPER_MODEL %}selected{% endif %}>{{ m.split('/')[-1] }}</option>
-        {% endfor %}
-      </select>
-      <span class="hint">ONNX voice models found in the project folder.</span>
+      <!-- ======= STEP 2 — Content ======= -->
+      <div class="step expanded" data-step="2" id="step-content">
+        <div class="step-rail">
+          <div class="step-dot">2</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-header" onclick="toggleStep(2)">
+            <span class="step-label">Pages</span>
+            <span class="step-hint" id="sum-content">all</span>
+            <svg class="step-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+          </div>
+          <div class="step-panel">
+            <div class="step-panel-inner">
 
-      <details>
-        <summary>Prosody settings</summary>
-        <div class="row-3">
-          <div>
-            <label for="length_scale">Speed</label>
-            <input type="number" id="length_scale" name="length_scale"
-                   value="{{ config.PIPER_LENGTH_SCALE }}" step="0.05" min="0.5" max="3.0">
-            <span class="hint">&lt;1 faster, &gt;1 slower</span>
-          </div>
-          <div>
-            <label for="sentence_silence">Pause (s)</label>
-            <input type="number" id="sentence_silence" name="sentence_silence"
-                   value="{{ config.PIPER_SENTENCE_SILENCE }}" step="0.1" min="0" max="3.0">
-            <span class="hint">Between sentences</span>
-          </div>
-          <div>
-            <label for="noise_scale">Variation</label>
-            <input type="number" id="noise_scale" name="noise_scale"
-                   value="{{ config.PIPER_NOISE_SCALE }}" step="any" min="0" max="1.0">
-            <span class="hint">Naturalness</span>
+              <label for="page_range">Page range</label>
+              <input type="text" id="page_range" name="page_range" value="all" placeholder='e.g. "all", "1-10", "5"'>
+              <div class="page-info" id="pageInfo"></div>
+
+            </div>
           </div>
         </div>
-        <input type="hidden" id="noise_w_scale" name="noise_w_scale"
-               value="{{ config.PIPER_NOISE_W_SCALE }}">
-      </details>
-    </div>
+      </div>
 
-    <!-- ===== Polly voice ===== -->
-    <div class="voice-section" id="voice-polly" style="display:none">
-      <div class="row">
-        <div>
-          <label for="voice_polly_id">Polly Voice</label>
-          <select id="voice_polly_id" name="voice_polly_id">
-            <option value="{{ config.POLLY_VOICE_ID }}">{{ config.POLLY_VOICE_ID }} (loading…)</option>
-          </select>
+      <!-- ======= STEP 3 — Engine & Voice ======= -->
+      <div class="step expanded" data-step="3" id="step-engine">
+        <div class="step-rail">
+          <div class="step-dot">3</div>
+          <div class="step-connector"></div>
         </div>
-        <div>
-          <label for="engine">Engine</label>
-          <select id="engine" name="engine">
-            <option value="neural">Neural</option>
-            <option value="standard">Standard</option>
-            <option value="generative">Generative</option>
-            <option value="long-form">Long-form</option>
-          </select>
+        <div class="step-content">
+          <div class="step-header" onclick="toggleStep(3)">
+            <span class="step-label">Engine &amp; Voice</span>
+            <span class="step-hint" id="sum-engine">Piper</span>
+            <svg class="step-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+          </div>
+          <div class="step-panel">
+            <div class="step-panel-inner">
+
+              <div class="row">
+                <div>
+                  <div class="backend-label-row">
+                    <label for="backend">TTS backend</label>
+                    <div class="lang-bar" id="langBar">
+                      <button type="button" class="lang-btn active" data-lang="all">All</button>
+                      <button type="button" class="lang-btn" data-lang="en">EN</button>
+                      <button type="button" class="lang-btn" data-lang="ro">RO</button>
+                    </div>
+                  </div>
+                  <select id="backend" name="backend">
+                    <optgroup label="Local">
+                      <option value="piper" data-langs="en" {% if config.DEFAULT_BACKEND == 'piper' %}selected{% endif %}>Piper</option>
+                      <option value="kokoro" data-langs="en" {% if config.DEFAULT_BACKEND == 'kokoro' %}selected{% endif %}>Kokoro</option>
+                      <option value="supertonic" data-langs="en" {% if config.DEFAULT_BACKEND == 'supertonic' %}selected{% endif %}>Supertonic</option>
+                      <option value="huggingface" data-langs="en,ro" {% if config.DEFAULT_BACKEND == 'huggingface' %}selected{% endif %}>Hugging Face</option>
+                      <option value="speecht5" data-langs="en">SpeechT5 (multi-speaker)</option>
+                    </optgroup>
+                    <optgroup label="Voice Cloning">
+                      <option value="xtts" data-langs="en">XTTS-v2 (English)</option>
+                      <option value="xtts_ro" data-langs="ro">XTTS-v2 (Romanian)</option>
+                    </optgroup>
+                    <optgroup label="Cloud">
+                      <option value="hf_cloud" data-langs="en,ro">HF Inference API</option>
+                      <option value="polly" data-langs="en" {% if config.DEFAULT_BACKEND == 'polly' %}selected{% endif %}>Amazon Polly</option>
+                    </optgroup>
+                  </select>
+                  <div class="backend-status" id="backendStatus"><span class="status-dot unknown"></span> <span id="backendStatusText">Checking&hellip;</span></div>
+                </div>
+              </div>
+
+              <!-- ===== Piper ===== -->
+              <div class="voice-section" id="voice-piper">
+                <label for="voice_piper">Piper model</label>
+                <select id="voice_piper" name="voice_piper">
+                  {% for m in onnx_models %}
+                    <option value="{{ m }}" {% if m == config.PIPER_MODEL %}selected{% endif %}>{{ m.split('/')[-1] }}</option>
+                  {% endfor %}
+                </select>
+                <span class="hint">ONNX voice models found in the project folder.</span>
+                <details>
+                  <summary>Prosody settings</summary>
+                  <div class="row-3">
+                    <div>
+                      <label for="length_scale">Speed</label>
+                      <input type="number" id="length_scale" name="length_scale" value="{{ config.PIPER_LENGTH_SCALE }}" step="0.05" min="0.5" max="3.0">
+                      <span class="hint">&lt;1 faster, &gt;1 slower</span>
+                    </div>
+                    <div>
+                      <label for="sentence_silence">Pause (s)</label>
+                      <input type="number" id="sentence_silence" name="sentence_silence" value="{{ config.PIPER_SENTENCE_SILENCE }}" step="0.1" min="0" max="3.0">
+                      <span class="hint">Between sentences</span>
+                    </div>
+                    <div>
+                      <label for="noise_scale">Variation</label>
+                      <input type="number" id="noise_scale" name="noise_scale" value="{{ config.PIPER_NOISE_SCALE }}" step="any" min="0" max="1.0">
+                      <span class="hint">Naturalness</span>
+                    </div>
+                  </div>
+                  <input type="hidden" id="noise_w_scale" name="noise_w_scale" value="{{ config.PIPER_NOISE_W_SCALE }}">
+                </details>
+              </div>
+
+              <!-- ===== Polly ===== -->
+              <div class="voice-section" id="voice-polly" style="display:none">
+                <div class="row">
+                  <div>
+                    <label for="voice_polly_id">Polly Voice</label>
+                    <select id="voice_polly_id" name="voice_polly_id">
+                      <option value="{{ config.POLLY_VOICE_ID }}">{{ config.POLLY_VOICE_ID }} (loading&hellip;)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="engine">Engine</label>
+                    <select id="engine" name="engine">
+                      <option value="neural">Neural</option>
+                      <option value="standard">Standard</option>
+                      <option value="generative">Generative</option>
+                      <option value="long-form">Long-form</option>
+                    </select>
+                  </div>
+                </div>
+                <span class="hint" id="polly-hint">Select Polly backend to load voices from AWS.</span>
+              </div>
+
+              <!-- ===== HuggingFace ===== -->
+              <div class="voice-section" id="voice-huggingface" style="display:none">
+                <label for="voice_hf_select">HF model</label>
+                <select id="voice_hf_select" name="voice_hf_select">
+                  <option value="facebook/mms-tts-eng">MMS-TTS English</option>
+                  <option value="facebook/mms-tts-ron">MMS-TTS Romanian</option>
+                </select>
+                <details>
+                  <summary>Custom model ID</summary>
+                  <input type="text" id="voice_hf" name="voice_hf" value="{{ config.HF_MODEL }}" placeholder="e.g. facebook/mms-tts-eng">
+                  <span class="hint">Override with any HF TTS model ID.</span>
+                </details>
+              </div>
+
+              <!-- ===== Kokoro ===== -->
+              <div class="voice-section" id="voice-kokoro" style="display:none">
+                <div class="row">
+                  <div>
+                    <label for="voice_kokoro_id">Kokoro Voice</label>
+                    <select id="voice_kokoro_id" name="voice_kokoro_id">
+                      <option value="{{ config.KOKORO_VOICE }}" selected>Loading voices...</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="kokoro_speed">Speed</label>
+                    <input type="number" id="kokoro_speed" name="kokoro_speed" value="{{ config.KOKORO_SPEED }}" step="0.1" min="0.5" max="2.0">
+                    <span class="hint">1.0 = normal</span>
+                  </div>
+                </div>
+                <span class="hint" id="kokoro-hint">Requires espeak-ng: <code>brew install espeak-ng</code></span>
+                <input type="hidden" id="kokoro_lang" name="kokoro_lang" value="{{ config.KOKORO_LANG }}">
+              </div>
+
+              <!-- ===== Supertonic ===== -->
+              <div class="voice-section" id="voice-supertonic" style="display:none">
+                <div class="row">
+                  <div>
+                    <label for="voice_supertonic_id">Supertonic Voice</label>
+                    <select id="voice_supertonic_id" name="voice_supertonic_id">
+                      <option value="{{ config.SUPERTONIC_VOICE }}" selected>Loading voices...</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="supertonic_speed">Speed</label>
+                    <input type="number" id="supertonic_speed" name="supertonic_speed" value="{{ config.SUPERTONIC_SPEED }}" step="0.05" min="0.5" max="2.0">
+                    <span class="hint">1.0 = normal</span>
+                  </div>
+                  <div>
+                    <label for="supertonic_silence">Silence (s)</label>
+                    <input type="number" id="supertonic_silence" name="supertonic_silence" value="{{ config.SUPERTONIC_SILENCE }}" step="0.1" min="0.0" max="2.0">
+                    <span class="hint">Gap between chunks</span>
+                  </div>
+                </div>
+                <span class="hint" id="supertonic-hint">First run downloads ~305MB model.</span>
+                <input type="hidden" id="supertonic_lang" name="supertonic_lang" value="{{ config.SUPERTONIC_LANG }}">
+              </div>
+
+              <!-- ===== XTTS ===== -->
+              <div class="voice-section" id="voice-xtts" style="display:none">
+                <label>Reference audio</label>
+                <select id="xtts_ref_audio" name="reference_audio">
+                  <option value="">&mdash; select a reference voice &mdash;</option>
+                </select>
+                <span class="hint">Upload reference audio on the Voice Cloning page first.</span>
+                <div class="row">
+                  <div>
+                    <label for="xtts_language">Language</label>
+                    <select id="xtts_language" name="xtts_language">
+                      <option value="en" selected>English</option>
+                      <option value="es">Spanish</option>
+                      <option value="fr">French</option>
+                      <option value="de">German</option>
+                      <option value="it">Italian</option>
+                      <option value="pt">Portuguese</option>
+                      <option value="pl">Polish</option>
+                      <option value="tr">Turkish</option>
+                      <option value="ru">Russian</option>
+                      <option value="nl">Dutch</option>
+                      <option value="cs">Czech</option>
+                      <option value="ar">Arabic</option>
+                      <option value="zh-cn">Chinese</option>
+                      <option value="ja">Japanese</option>
+                      <option value="hu">Hungarian</option>
+                      <option value="ko">Korean</option>
+                      <option value="hi">Hindi</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="xtts_speed">Speed</label>
+                    <input type="number" id="xtts_speed" name="xtts_speed" value="1.0" step="0.1" min="0.5" max="2.0">
+                  </div>
+                </div>
+                <span class="hint">XTTS-v2: ~1.8GB download on first use. 17 languages.</span>
+              </div>
+
+              <!-- ===== XTTS Romanian ===== -->
+              <div class="voice-section" id="voice-xtts_ro" style="display:none">
+                <label>Reference audio</label>
+                <select id="xtts_ro_ref_audio" name="reference_audio">
+                  <option value="">&mdash; select a reference voice &mdash;</option>
+                </select>
+                <span class="hint">Upload reference audio on the Voice Cloning page first.</span>
+                <div class="row">
+                  <div>
+                    <label for="xtts_ro_speed">Speed</label>
+                    <input type="number" id="xtts_ro_speed" name="xtts_speed" value="1.0" step="0.1" min="0.5" max="2.0">
+                  </div>
+                </div>
+                <span class="hint">Romanian XTTS-v2 fine-tune: ~1.8GB on first use.</span>
+              </div>
+
+              <!-- ===== SpeechT5 ===== -->
+              <div class="voice-section" id="voice-speecht5" style="display:none">
+                <label for="speecht5_speaker">Speaker</label>
+                <select id="speecht5_speaker" name="speecht5_speaker">
+                  <option value="clb">CLB (Female)</option>
+                  <option value="slt">SLT (Female)</option>
+                  <option value="fem1">Female Speaker 1</option>
+                  <option value="fem2">Female Speaker 2</option>
+                  <option value="rms">RMS (Male)</option>
+                  <option value="bdl">BDL (Male)</option>
+                  <option value="ksp">KSP (Male)</option>
+                  <option value="jmk">JMK (Male)</option>
+                  <option value="awb">AWB (Male, Scottish)</option>
+                  <option value="male1">Male Speaker 1</option>
+                </select>
+                <span class="hint">SpeechT5: ~500MB on first use. Multi-speaker English.</span>
+              </div>
+
+              <!-- ===== HF Cloud ===== -->
+              <div class="voice-section" id="voice-hf_cloud" style="display:none">
+                <label for="voice_hf_cloud">HF model ID</label>
+                <select id="voice_hf_cloud_select" name="voice_hf_cloud_select">
+                  <option value="microsoft/speecht5_tts">SpeechT5 TTS</option>
+                  <option value="facebook/mms-tts-eng">MMS-TTS English</option>
+                  <option value="facebook/mms-tts-ron">MMS-TTS Romanian</option>
+                </select>
+                <details>
+                  <summary>Custom model ID</summary>
+                  <input type="text" id="voice_hf_cloud" name="voice_hf_cloud" value="" placeholder="e.g. facebook/mms-tts-eng">
+                  <span class="hint">Override with any HF-hosted TTS model ID.</span>
+                </details>
+                <span class="hint">Requires HF_TOKEN in .env. Free tier is rate-limited.</span>
+              </div>
+
+            </div>
+          </div>
         </div>
       </div>
-      <span class="hint" id="polly-hint">Select Polly backend to load available voices from AWS.</span>
-    </div>
 
-    <!-- ===== HuggingFace voice ===== -->
-    <div class="voice-section" id="voice-huggingface" style="display:none">
-      <label for="voice_hf_select">HF model</label>
-      <select id="voice_hf_select" name="voice_hf_select">
-        <option value="facebook/mms-tts-eng">MMS-TTS English</option>
-        <option value="facebook/mms-tts-ron">MMS-TTS Romanian</option>
-      </select>
-      <details>
-        <summary>Custom model ID</summary>
-        <input type="text" id="voice_hf" name="voice_hf" value="{{ config.HF_MODEL }}" placeholder="e.g. facebook/mms-tts-eng">
-        <span class="hint">Override with any HF TTS model ID. Leave empty to use the dropdown selection.</span>
-      </details>
-    </div>
+    </div><!-- /wizard -->
 
-    <!-- ===== Kokoro voice ===== -->
-    <div class="voice-section" id="voice-kokoro" style="display:none">
-      <div class="row">
-        <div>
-          <label for="voice_kokoro_id">Kokoro Voice</label>
-          <select id="voice_kokoro_id" name="voice_kokoro_id">
-            <option value="{{ config.KOKORO_VOICE }}" selected>Loading voices...</option>
-          </select>
-        </div>
-        <div>
-          <label for="kokoro_speed">Speed</label>
-          <input type="number" id="kokoro_speed" name="kokoro_speed"
-                 value="{{ config.KOKORO_SPEED }}" step="0.1" min="0.5" max="2.0">
-          <span class="hint">1.0 = normal, &gt;1 faster, &lt;1 slower</span>
-        </div>
+    <!-- ============================================================
+         REVIEW CARD — Summary + Output Options + Convert
+         ============================================================ -->
+    <div class="review-card" id="reviewCard">
+      <div class="review-title">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="2" width="10" height="12" rx="1.5"/><line x1="6" y1="5" x2="10" y2="5"/><line x1="6" y1="7.5" x2="10" y2="7.5"/><line x1="6" y1="10" x2="8.5" y2="10"/></svg>
+        Review
       </div>
-      <span class="hint" id="kokoro-hint">Requires espeak-ng: <code>brew install espeak-ng</code></span>
-      <input type="hidden" id="kokoro_lang" name="kokoro_lang" value="{{ config.KOKORO_LANG }}">
-    </div>
 
-    <!-- ===== Supertonic voice ===== -->
-    <div class="voice-section" id="voice-supertonic" style="display:none">
-      <div class="row">
-        <div>
-          <label for="voice_supertonic_id">Supertonic Voice</label>
-          <select id="voice_supertonic_id" name="voice_supertonic_id">
-            <option value="{{ config.SUPERTONIC_VOICE }}" selected>Loading voices...</option>
-          </select>
-        </div>
-        <div>
-          <label for="supertonic_speed">Speed</label>
-          <input type="number" id="supertonic_speed" name="supertonic_speed"
-                 value="{{ config.SUPERTONIC_SPEED }}" step="0.05" min="0.5" max="2.0">
-          <span class="hint">1.0 = normal, &gt;1 faster, &lt;1 slower</span>
-        </div>
-        <div>
-          <label for="supertonic_silence">Silence (s)</label>
-          <input type="number" id="supertonic_silence" name="supertonic_silence"
-                 value="{{ config.SUPERTONIC_SILENCE }}" step="0.1" min="0.0" max="2.0">
-          <span class="hint">Gap between chunks</span>
-        </div>
+      <div class="review-grid" id="reviewGrid">
+        <span class="review-key">Source</span>
+        <span class="review-val empty" id="rv-source">&mdash;</span>
+        <span class="review-key">Pages</span>
+        <span class="review-val" id="rv-pages">all</span>
+        <span class="review-key">Engine</span>
+        <span class="review-val" id="rv-engine">Piper</span>
+        <span class="review-key">Voice</span>
+        <span class="review-val" id="rv-voice">&mdash;</span>
       </div>
-      <span class="hint" id="supertonic-hint">First run downloads ~305MB model.</span>
-      <input type="hidden" id="supertonic_lang" name="supertonic_lang" value="{{ config.SUPERTONIC_LANG }}">
-    </div>
 
-    <!-- ===== XTTS voice cloning ===== -->
-    <div class="voice-section" id="voice-xtts" style="display:none">
-      <label>Reference audio</label>
-      <select id="xtts_ref_audio" name="reference_audio">
-        <option value="">— select a reference voice —</option>
-      </select>
-      <span class="hint">Upload reference audio on the Voice Cloning page first.</span>
-      <div class="row">
-        <div>
-          <label for="xtts_language">Language</label>
-          <select id="xtts_language" name="xtts_language">
-            <option value="en" selected>English</option>
-            <option value="es">Spanish</option>
-            <option value="fr">French</option>
-            <option value="de">German</option>
-            <option value="it">Italian</option>
-            <option value="pt">Portuguese</option>
-            <option value="pl">Polish</option>
-            <option value="tr">Turkish</option>
-            <option value="ru">Russian</option>
-            <option value="nl">Dutch</option>
-            <option value="cs">Czech</option>
-            <option value="ar">Arabic</option>
-            <option value="zh-cn">Chinese</option>
-            <option value="ja">Japanese</option>
-            <option value="hu">Hungarian</option>
-            <option value="ko">Korean</option>
-            <option value="hi">Hindi</option>
-          </select>
-        </div>
-        <div>
-          <label for="xtts_speed">Speed</label>
-          <input type="number" id="xtts_speed" name="xtts_speed" value="1.0" step="0.1" min="0.5" max="2.0">
-        </div>
+      <hr class="review-divider">
+
+      <div class="toggle-row" id="chapterModeRow" style="display:none">
+        <label class="toggle">
+          <input type="checkbox" id="chapter_mode" name="chapter_mode" value="1">
+          <span class="slider"></span>
+        </label>
+        <label for="chapter_mode" style="cursor:pointer">Split by chapter <span id="chapterModeHint" class="hint" style="display:inline;margin:0;font-size:.7rem"></span></label>
       </div>
-      <span class="hint">XTTS-v2: ~1.8GB download on first use. Supports 17 languages.</span>
-    </div>
 
-    <!-- ===== XTTS Romanian ===== -->
-    <div class="voice-section" id="voice-xtts_ro" style="display:none">
-      <label>Reference audio</label>
-      <select id="xtts_ro_ref_audio" name="reference_audio">
-        <option value="">— select a reference voice —</option>
-      </select>
-      <span class="hint">Upload reference audio on the Voice Cloning page first.</span>
-      <div class="row">
-        <div>
-          <label for="xtts_ro_speed">Speed</label>
-          <input type="number" id="xtts_ro_speed" name="xtts_speed" value="1.0" step="0.1" min="0.5" max="2.0">
-        </div>
+      <div class="toggle-row">
+        <label class="toggle">
+          <input type="checkbox" id="save_to_output" name="save_to_output" value="1">
+          <span class="slider"></span>
+        </label>
+        <label for="save_to_output" style="cursor:pointer">Save to <code>output/</code> folder</label>
       </div>
-      <span class="hint">Romanian XTTS-v2 fine-tune: ~1.8GB download on first use.</span>
+
+      <button type="submit" class="btn-convert" id="convertBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <span id="convertBtnLabel">Convert to MP3</span>
+      </button>
     </div>
 
-    <!-- ===== SpeechT5 ===== -->
-    <div class="voice-section" id="voice-speecht5" style="display:none">
-      <label for="speecht5_speaker">Speaker</label>
-      <select id="speecht5_speaker" name="speecht5_speaker">
-        <option value="clb">CLB (Female)</option>
-        <option value="slt">SLT (Female)</option>
-        <option value="fem1">Female Speaker 1</option>
-        <option value="fem2">Female Speaker 2</option>
-        <option value="rms">RMS (Male)</option>
-        <option value="bdl">BDL (Male)</option>
-        <option value="ksp">KSP (Male)</option>
-        <option value="jmk">JMK (Male)</option>
-        <option value="awb">AWB (Male, Scottish)</option>
-        <option value="male1">Male Speaker 1</option>
-      </select>
-      <span class="hint">Microsoft SpeechT5: ~500MB download on first use. Multi-speaker English TTS.</span>
-    </div>
-
-    <!-- ===== HF Cloud ===== -->
-    <div class="voice-section" id="voice-hf_cloud" style="display:none">
-      <label for="voice_hf_cloud">HF model ID</label>
-      <select id="voice_hf_cloud_select" name="voice_hf_cloud_select">
-        <option value="microsoft/speecht5_tts">SpeechT5 TTS</option>
-        <option value="facebook/mms-tts-eng">MMS-TTS English</option>
-        <option value="facebook/mms-tts-ron">MMS-TTS Romanian</option>
-      </select>
-      <details>
-        <summary>Custom model ID</summary>
-        <input type="text" id="voice_hf_cloud" name="voice_hf_cloud" value="" placeholder="e.g. facebook/mms-tts-eng">
-        <span class="hint">Override with any HF-hosted TTS model ID.</span>
-      </details>
-      <span class="hint">Requires HF_TOKEN in .env. Free tier is rate-limited.</span>
-    </div>
-
-    <div class="toggle-row" id="chapterModeRow" style="display:none">
-      <label class="toggle">
-        <input type="checkbox" id="chapter_mode" name="chapter_mode" value="1">
-        <span class="slider"></span>
-      </label>
-      <label for="chapter_mode" style="margin:0;cursor:pointer">Split by chapter <span id="chapterModeHint" class="hint" style="display:inline;margin:0;font-size:.72rem"></span></label>
-    </div>
-
-    <div class="toggle-row">
-      <label class="toggle">
-        <input type="checkbox" id="save_to_output" name="save_to_output" value="1">
-        <span class="slider"></span>
-      </label>
-      <label for="save_to_output" style="margin:0;cursor:pointer">Save to <code>output/</code> folder instead of downloading</label>
-    </div>
-
-    <button type="submit" id="convertBtn">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;vertical-align:middle;margin-right:.4rem"><polygon points="5 3 19 12 5 21 5 3"/></svg><span id="convertBtnLabel">Convert to MP3</span>
-    </button>
   </form>
-</div>
 </section>
 
 <!-- ========== PAGE: Voice Cloning ========== -->
 <section id="page-cloning" class="page">
 <div class="card">
   <h1>Voice Cloning</h1>
-  <p class="subtitle">Upload a 3–10 second voice sample to clone any voice with XTTS-v2.</p>
+  <p class="subtitle">Upload a 3&ndash;10 second voice sample to clone any voice with XTTS-v2.</p>
 
-  <!-- Upload zone -->
   <div class="ref-upload-zone" id="refUploadZone">
     <svg class="ref-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
     <svg class="ref-upload-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
     <p>Drop an audio file here or click to upload</p>
-    <p style="font-size:.7rem;color:var(--text-muted)">WAV, MP3, M4A, FLAC, OGG · max 10MB · 3–10 seconds ideal</p>
+    <p style="font-size:.68rem;color:var(--text-dim)">WAV, MP3, M4A, FLAC, OGG &middot; max 10MB &middot; 3&ndash;10s ideal</p>
     <input type="file" id="refFileInput" accept=".wav,.mp3,.m4a,.flac,.ogg" style="display:none">
   </div>
 
-  <!-- Status message -->
   <div id="refUploadStatus" class="flash" style="display:none"></div>
 
-  <!-- Saved references list -->
   <label style="margin-top:1rem">Saved reference voices</label>
   <div class="ref-list" id="refList">
     <span class="hint">No reference voices yet. Upload one above.</span>
@@ -918,7 +1152,7 @@
 <div class="overlay" id="overlay">
   <div class="spinner-box">
     <div class="spinner"></div>
-    <p id="progress-phase">Extracting text…</p>
+    <p id="progress-phase">Extracting text&hellip;</p>
     <div class="progress-track">
       <div class="progress-fill" id="progress-fill"></div>
     </div>
@@ -927,7 +1161,117 @@
 </div>
 
 <script>
-  // ---- Sidebar navigation ----
+  /* ============================================================
+     STEP WIZARD — Toggle, Fill State, Summaries
+     ============================================================ */
+  const CHECK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><polyline points="3.5 8.5 6.5 11.5 12.5 5"/></svg>';
+
+  function toggleStep(n) {
+    const el = document.querySelector(`.step[data-step="${n}"]`);
+    if (!el) return;
+    el.classList.toggle('collapsed');
+    el.classList.toggle('expanded');
+  }
+
+  function setStepFilled(n, filled) {
+    const el = document.querySelector(`.step[data-step="${n}"]`);
+    if (!el) return;
+    const dot = el.querySelector('.step-dot');
+    if (filled) {
+      el.classList.add('filled');
+      dot.innerHTML = CHECK_SVG;
+    } else {
+      el.classList.remove('filled');
+      dot.innerHTML = n;
+    }
+  }
+
+  function updateStepStates() {
+    // Step 1: file selected?
+    const hasFile = (activeSource === 'upload' && bookFileInput.files.length > 0)
+                 || (activeSource === 'input' && inputFileSel.value);
+    setStepFilled(1, hasFile);
+
+    // Summary for step 1
+    const sumSource = document.getElementById('sum-source');
+    if (hasFile) {
+      if (activeSource === 'upload' && bookFileInput.files.length)
+        sumSource.textContent = bookFileInput.files[0].name;
+      else if (activeSource === 'input' && inputFileSel.value)
+        sumSource.textContent = inputFileSel.value;
+    } else {
+      sumSource.textContent = 'No file selected';
+    }
+
+    // Step 2: page range
+    const pages = pageRangeInput.value.trim();
+    setStepFilled(2, !!pages);
+    document.getElementById('sum-content').textContent = pages || '—';
+
+    // Step 3: always filled (has default)
+    setStepFilled(3, true);
+    const backendLabel = backendSel.options[backendSel.selectedIndex]?.text || '';
+    document.getElementById('sum-engine').textContent = backendLabel;
+
+    // Review card
+    updateReview();
+  }
+
+  function updateReview() {
+    const rvSource = document.getElementById('rv-source');
+    const rvPages  = document.getElementById('rv-pages');
+    const rvEngine = document.getElementById('rv-engine');
+    const rvVoice  = document.getElementById('rv-voice');
+
+    // Source
+    let srcName = '';
+    if (activeSource === 'upload' && bookFileInput.files.length)
+      srcName = bookFileInput.files[0].name;
+    else if (activeSource === 'input' && inputFileSel.value)
+      srcName = inputFileSel.value;
+    rvSource.textContent = srcName || '—';
+    rvSource.className = srcName ? 'review-val' : 'review-val empty';
+
+    // Pages
+    rvPages.textContent = pageRangeInput.value.trim() || '—';
+
+    // Engine
+    rvEngine.textContent = backendSel.options[backendSel.selectedIndex]?.text || '—';
+
+    // Voice (context dependent)
+    const b = backendSel.value;
+    let voiceName = '';
+    if (b === 'piper') {
+      const sel = document.getElementById('voice_piper');
+      voiceName = sel.options[sel.selectedIndex]?.text || '';
+    } else if (b === 'polly') {
+      const sel = document.getElementById('voice_polly_id');
+      voiceName = sel.options[sel.selectedIndex]?.text || '';
+    } else if (b === 'kokoro') {
+      const sel = document.getElementById('voice_kokoro_id');
+      voiceName = sel.options[sel.selectedIndex]?.text || '';
+    } else if (b === 'supertonic') {
+      const sel = document.getElementById('voice_supertonic_id');
+      voiceName = sel.options[sel.selectedIndex]?.text || '';
+    } else if (b === 'speecht5') {
+      const sel = document.getElementById('speecht5_speaker');
+      voiceName = sel.options[sel.selectedIndex]?.text || '';
+    } else if (b === 'huggingface') {
+      voiceName = document.getElementById('voice_hf').value.trim() || document.getElementById('voice_hf_select')?.selectedOptions[0]?.text || '';
+    } else if (b === 'hf_cloud') {
+      voiceName = document.getElementById('voice_hf_cloud').value.trim() || document.getElementById('voice_hf_cloud_select')?.selectedOptions[0]?.text || '';
+    } else if (b === 'xtts') {
+      voiceName = document.getElementById('xtts_ref_audio').value || 'No ref audio';
+    } else if (b === 'xtts_ro') {
+      voiceName = document.getElementById('xtts_ro_ref_audio').value || 'No ref audio';
+    }
+    rvVoice.textContent = voiceName || '—';
+    rvVoice.className = voiceName ? 'review-val' : 'review-val empty';
+  }
+
+  /* ============================================================
+     SIDEBAR NAVIGATION
+     ============================================================ */
   document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', () => {
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -938,13 +1282,15 @@
     });
   });
 
-  // ---- Book Source tabs ----
-  const sourceTabs = document.querySelectorAll('.source-tab');
-  const sourceUpload = document.getElementById('source-upload');
-  const sourceInput  = document.getElementById('source-input');
+  /* ============================================================
+     BOOK SOURCE TABS
+     ============================================================ */
+  const sourceTabs     = document.querySelectorAll('.source-tab');
+  const sourceUpload   = document.getElementById('source-upload');
+  const sourceInput    = document.getElementById('source-input');
   const bookSourceField = document.getElementById('book_source');
-  const bookFileInput = document.getElementById('bookFile');
-  const inputFileSel = document.getElementById('input_file');
+  const bookFileInput  = document.getElementById('bookFile');
+  const inputFileSel   = document.getElementById('input_file');
   let activeSource = 'upload';
 
   sourceTabs.forEach(tab => {
@@ -956,11 +1302,14 @@
       sourceUpload.style.display = activeSource === 'upload' ? '' : 'none';
       sourceInput.style.display  = activeSource === 'input'  ? '' : 'none';
       if (activeSource === 'input' && inputFileSel.value) fetchPageInfo();
+      updateStepStates();
     });
   });
 
-  // ---- Smart page info ----
-  const pageInfoDiv = document.getElementById('pageInfo');
+  /* ============================================================
+     SMART PAGE INFO
+     ============================================================ */
+  const pageInfoDiv  = document.getElementById('pageInfo');
   const pageRangeInput = document.getElementById('page_range');
   let cachedPageData = null;
 
@@ -996,14 +1345,14 @@
   function renderPageInfo() {
     if (!cachedPageData) { pageInfoDiv.className = 'page-info'; return; }
     const { total_pages, pages, chapters } = cachedPageData;
-    const textPages = pages.filter(p => p.has_text).length;
+    const textPages  = pages.filter(p => p.has_text).length;
     const blankPages = total_pages - textPages;
 
     const firstText = pages.find(p => p.has_text);
     const lastText  = [...pages].reverse().find(p => p.has_text);
     let suggestion = '';
     if (firstText && lastText && (firstText.page > 1 || lastText.page < total_pages)) {
-      suggestion = `<span class="stat">Suggested: <a href="#" class="suggest-range" data-range="${firstText.page}-${lastText.page}">${firstText.page}–${lastText.page}</a></span>`;
+      suggestion = `<span class="stat">Suggested: <a href="#" class="suggest-range" data-range="${firstText.page}-${lastText.page}">${firstText.page}&ndash;${lastText.page}</a></span>`;
     }
 
     let html = `<div class="stats">`;
@@ -1030,41 +1379,41 @@
 
     const link = pageInfoDiv.querySelector('.suggest-range');
     if (link) {
-      link.addEventListener('click', e => {
-        e.preventDefault();
-        pageRangeInput.value = link.dataset.range;
-      });
+      link.addEventListener('click', e => { e.preventDefault(); pageRangeInput.value = link.dataset.range; updateStepStates(); });
     }
     pageInfoDiv.querySelectorAll('.chapter-item').forEach(el => {
-      el.addEventListener('click', () => {
-        pageRangeInput.value = el.dataset.range;
-      });
+      el.addEventListener('click', () => { pageRangeInput.value = el.dataset.range; updateStepStates(); });
     });
 
-    // Show/hide chapter mode toggle
-    const chapterRow = document.getElementById('chapterModeRow');
+    // Chapter mode toggle
+    const chapterRow  = document.getElementById('chapterModeRow');
     const chapterHint = document.getElementById('chapterModeHint');
     if (chapters && chapters.length > 0) {
       chapterRow.style.display = '';
-      chapterHint.textContent = `(${chapters.length} chapters detected → ZIP of MP3s)`;
+      chapterHint.textContent = `(${chapters.length} chapters \u2192 ZIP of MP3s)`;
     } else {
       chapterRow.style.display = 'none';
       document.getElementById('chapter_mode').checked = false;
     }
   }
 
-  bookFileInput.addEventListener('change', fetchPageInfo);
-  inputFileSel.addEventListener('change', fetchPageInfo);
+  bookFileInput.addEventListener('change', () => { fetchPageInfo(); updateStepStates(); });
+  inputFileSel.addEventListener('change', ()  => { fetchPageInfo(); updateStepStates(); });
+  pageRangeInput.addEventListener('input', updateStepStates);
 
-  // ---- Chapter mode toggle → update button label ----
+  /* ============================================================
+     CHAPTER MODE TOGGLE
+     ============================================================ */
   document.getElementById('chapter_mode').addEventListener('change', function() {
     document.getElementById('convertBtnLabel').textContent =
       this.checked ? 'Convert chapters to ZIP' : 'Convert to MP3';
   });
 
-  // ---- Backend voice switching ----
-  const backendSel  = document.getElementById('backend');
-  const sections    = {
+  /* ============================================================
+     BACKEND / VOICE SWITCHING
+     ============================================================ */
+  const backendSel = document.getElementById('backend');
+  const sections = {
     piper:       document.getElementById('voice-piper'),
     polly:       document.getElementById('voice-polly'),
     huggingface: document.getElementById('voice-huggingface'),
@@ -1076,7 +1425,6 @@
     hf_cloud:    document.getElementById('voice-hf_cloud'),
   };
 
-  // ---- Model status (must be before updateVoice) ----
   const statusDot  = document.querySelector('#backendStatus .status-dot');
   const statusText = document.getElementById('backendStatusText');
   let backendStatusCache = null;
@@ -1114,20 +1462,20 @@
         el.disabled = !isActive;
       });
     });
-    const active = sections[backendSel.value];
-    if (active) active.style.display = '';
-    
     if (backendSel.value === 'polly') fetchPollyVoices();
     if (backendSel.value === 'kokoro') fetchKokoroVoices();
     if (backendSel.value === 'supertonic') fetchSupertTonicVoices();
     if (backendSel.value === 'xtts' || backendSel.value === 'xtts_ro') loadRefVoicesIntoDropdowns();
     updateBackendStatus();
+    updateStepStates();
   }
   backendSel.addEventListener('change', updateVoice);
   fetchBackendStatus();
   updateVoice();
 
-  // ---- Dynamic Polly voices ----
+  /* ============================================================
+     DYNAMIC POLLY VOICES
+     ============================================================ */
   const pollyVoiceSel = document.getElementById('voice_polly_id');
   const pollyEngineSel = document.getElementById('engine');
   const pollyHint = document.getElementById('polly-hint');
@@ -1135,17 +1483,14 @@
 
   async function fetchPollyVoices() {
     if (pollyVoicesCache) { renderPollyVoices(); return; }
-    pollyHint.textContent = 'Loading voices from AWS…';
+    pollyHint.textContent = 'Loading voices from AWS\u2026';
     try {
       const resp = await fetch('/api/polly-voices');
       const data = await resp.json();
-      if (data.error) {
-        pollyHint.textContent = 'Could not load voices: ' + data.error;
-        return;
-      }
+      if (data.error) { pollyHint.textContent = 'Could not load voices: ' + data.error; return; }
       pollyVoicesCache = data.voices;
       renderPollyVoices();
-      pollyHint.textContent = `${pollyVoicesCache.length} voices available · SSML pauses added automatically.`;
+      pollyHint.textContent = `${pollyVoicesCache.length} voices available.`;
     } catch (e) {
       pollyHint.textContent = 'Failed to connect to AWS.';
     }
@@ -1157,7 +1502,6 @@
     const filtered = pollyVoicesCache.filter(v => v.engines.includes(engine));
     const current = pollyVoiceSel.value;
     pollyVoiceSel.innerHTML = '';
-    // Group by language
     const byLang = {};
     for (const v of filtered) {
       const key = v.language;
@@ -1176,11 +1520,13 @@
       }
       pollyVoiceSel.appendChild(optgroup);
     }
-    if (!filtered.length) {
-      pollyVoiceSel.innerHTML = '<option value="">No voices for this engine</option>';
-    }
+    if (!filtered.length) pollyVoiceSel.innerHTML = '<option value="">No voices for this engine</option>';
+    updateStepStates();
   }
-  // ---- Dynamic Kokoro voices ----
+
+  /* ============================================================
+     DYNAMIC KOKORO VOICES
+     ============================================================ */
   const kokoroVoiceSel = document.getElementById('voice_kokoro_id');
   const kokoroHint = document.getElementById('kokoro-hint');
   let kokoroVoicesCache = null;
@@ -1190,23 +1536,16 @@
     try {
       const resp = await fetch('/api/kokoro-voices');
       const data = await resp.json();
-      if (data.error) {
-        kokoroHint.textContent = 'Could not load voices: ' + data.error;
-        return;
-      }
+      if (data.error) { kokoroHint.textContent = 'Could not load voices: ' + data.error; return; }
       kokoroVoicesCache = data.voices;
       renderKokoroVoices();
-    } catch (e) {
-      kokoroHint.textContent = 'Failed to load voices.';
-    }
+    } catch (e) { kokoroHint.textContent = 'Failed to load voices.'; }
   }
 
   function renderKokoroVoices() {
     if (!kokoroVoicesCache) return;
     const current = kokoroVoiceSel.value;
     kokoroVoiceSel.innerHTML = '';
-    
-    // Group by accent
     for (const [accent, voices] of Object.entries(kokoroVoicesCache)) {
       const optgroup = document.createElement('optgroup');
       optgroup.label = accent;
@@ -1219,9 +1558,12 @@
       }
       kokoroVoiceSel.appendChild(optgroup);
     }
+    updateStepStates();
   }
 
-  // ---- Dynamic Supertonic voices ----
+  /* ============================================================
+     DYNAMIC SUPERTONIC VOICES
+     ============================================================ */
   const supertonicVoiceSel = document.getElementById('voice_supertonic_id');
   const supertonic_hint = document.getElementById('supertonic-hint');
   let supertonic_voices_cache = null;
@@ -1232,24 +1574,17 @@
     try {
       const resp = await fetch('/api/supertonic-voices');
       const data = await resp.json();
-      if (data.error) {
-        supertonic_hint.textContent = 'Could not load voices: ' + data.error;
-        return;
-      }
+      if (data.error) { supertonic_hint.textContent = 'Could not load voices: ' + data.error; return; }
       supertonic_voices_cache = data.voices;
       renderSupertTonicVoices();
       supertonic_hint.textContent = 'First run downloads ~305MB model.';
-    } catch (e) {
-      supertonic_hint.textContent = 'Failed to load voices.';
-    }
+    } catch (e) { supertonic_hint.textContent = 'Failed to load voices.'; }
   }
 
   function renderSupertTonicVoices() {
     if (!supertonic_voices_cache) return;
     const current = supertonicVoiceSel.value;
     supertonicVoiceSel.innerHTML = '';
-    
-    // Group by language
     for (const [lang, voices] of Object.entries(supertonic_voices_cache)) {
       const optgroup = document.createElement('optgroup');
       optgroup.label = lang;
@@ -1262,15 +1597,18 @@
       }
       supertonicVoiceSel.appendChild(optgroup);
     }
+    updateStepStates();
   }
 
-  const overlay      = document.getElementById('overlay');
-  const progressFill = document.getElementById('progress-fill');
+  /* ============================================================
+     STATUS / RESULT DISPLAY
+     ============================================================ */
+  const overlay       = document.getElementById('overlay');
+  const progressFill  = document.getElementById('progress-fill');
   const progressPhase = document.getElementById('progress-phase');
   const progressLabel = document.getElementById('progress-label');
-  const statusDiv  = document.getElementById('status');
-  const form       = document.getElementById('convertForm');
-
+  const statusDiv     = document.getElementById('status');
+  const form          = document.getElementById('convertForm');
   const resultCard    = document.getElementById('result-card');
   const resultTitle   = document.getElementById('result-title');
   const resultFname   = document.getElementById('result-filename');
@@ -1279,7 +1617,6 @@
   const statCost      = document.getElementById('stat-cost');
 
   function showStatus(msg, type) {
-    // Only used for errors now; success uses showResult()
     resultCard.style.display = 'none';
     statusDiv.textContent = msg;
     statusDiv.className = 'flash ' + type;
@@ -1289,7 +1626,6 @@
     statusDiv.style.display = 'none';
     resultCard.style.display = 'none';
   }
-
   function showResult({ title, filename, chars, costUsd }) {
     statusDiv.style.display = 'none';
     resultTitle.textContent = title;
@@ -1301,51 +1637,36 @@
     } else {
       resultStats.style.display = 'none';
     }
-    // Force re-trigger animation on repeated conversions
     resultCard.style.display = 'none';
     void resultCard.offsetWidth;
     resultCard.style.display = '';
   }
 
-  // Submit via fetch so we can control download + overlay lifecycle
+  /* ============================================================
+     FORM SUBMISSION
+     ============================================================ */
   form.addEventListener('submit', async function(e) {
     e.preventDefault();
     hideStatus();
 
-    // Client-side checks
     if (activeSource === 'upload') {
-      if (!bookFileInput.files.length) {
-        showStatus('Please select a file.', 'error');
-        return;
-      }
+      if (!bookFileInput.files.length) { showStatus('Please select a file.', 'error'); return; }
       const file = bookFileInput.files[0];
       const lower = file.name.toLowerCase();
       if (!(lower.endsWith('.pdf') || lower.endsWith('.epub'))) {
-        showStatus('Please select a .pdf or .epub file.', 'error');
-        return;
+        showStatus('Please select a .pdf or .epub file.', 'error'); return;
       }
     } else {
-      if (!inputFileSel.value) {
-        showStatus('Please select a file from the input folder.', 'error');
-        return;
-      }
+      if (!inputFileSel.value) { showStatus('Please select a file from the input folder.', 'error'); return; }
     }
-    const pageRange = document.getElementById('page_range').value.trim();
-    if (!pageRange) {
-      showStatus('Please enter a page range.', 'error');
-      return;
-    }
+    const pageRange = pageRangeInput.value.trim();
+    if (!pageRange) { showStatus('Please enter a page range.', 'error'); return; }
 
-    // Map the active voice input into the form data
     const backend = backendSel.value;
     const fd = new FormData(form);
 
-    // Remove the file input if using input/ source to avoid sending a large empty part
-    if (activeSource === 'input') {
-      fd.delete('pdf');
-    } else {
-      fd.delete('input_file');
-    }
+    if (activeSource === 'input') fd.delete('pdf');
+    else fd.delete('input_file');
 
     let voiceVal = '';
     if (backend === 'piper')       voiceVal = document.getElementById('voice_piper').value;
@@ -1362,39 +1683,35 @@
     }
     fd.set('voice', voiceVal);
 
-    // Chapter mode
     const isChapterMode = document.getElementById('chapter_mode').checked;
     if (isChapterMode) fd.set('chapter_mode', '1');
 
-    // Generate a unique job ID for progress tracking
     const jobId = crypto.randomUUID();
     fd.set('job_id', jobId);
 
-    // Reset progress UI
     progressFill.style.width = '0%';
-    progressPhase.textContent = 'Extracting text…';
+    progressPhase.textContent = 'Extracting text\u2026';
     progressLabel.textContent = '';
     overlay.classList.add('active');
 
-    // Poll for progress updates
     let pollTimer = setInterval(async () => {
       try {
         const r = await fetch('/progress/' + jobId);
         const p = await r.json();
         if (p.phase === 'extracting') {
-          progressPhase.textContent = 'Extracting text…';
+          progressPhase.textContent = 'Extracting text\u2026';
           progressFill.style.width = '5%';
           progressLabel.textContent = '';
         } else if (p.phase === 'synthesizing' && p.total > 0) {
-          const pct = Math.round((p.current / p.total) * 90) + 5; // 5-95%
+          const pct = Math.round((p.current / p.total) * 90) + 5;
           progressFill.style.width = pct + '%';
-          progressPhase.textContent = isChapterMode ? 'Synthesizing chapters…' : 'Synthesizing audio…';
+          progressPhase.textContent = isChapterMode ? 'Synthesizing chapters\u2026' : 'Synthesizing audio\u2026';
           progressLabel.textContent = isChapterMode
             ? `Chapter ${p.current} of ${p.total}`
             : `Chunk ${p.current} of ${p.total}`;
         } else if (p.phase === 'encoding') {
           progressFill.style.width = '95%';
-          progressPhase.textContent = 'Encoding MP3…';
+          progressPhase.textContent = 'Encoding MP3\u2026';
           progressLabel.textContent = '';
         }
       } catch (_) {}
@@ -1402,7 +1719,6 @@
 
     try {
       const resp = await fetch('/convert', { method: 'POST', body: fd });
-
       clearInterval(pollTimer);
       progressFill.style.width = '100%';
       progressPhase.textContent = 'Done!';
@@ -1410,31 +1726,21 @@
 
       if (!resp.ok) {
         let msg = 'Conversion failed.';
-        try {
-          const json = await resp.json();
-          if (json.error) msg = json.error;
-        } catch (_) {}
+        try { const json = await resp.json(); if (json.error) msg = json.error; } catch (_) {}
         showStatus(msg, 'error');
         return;
       }
 
-      // Check if server returned a JSON "saved" response
       const ct = resp.headers.get('Content-Type') || '';
       if (ct.includes('application/json')) {
         const json = await resp.json();
         if (json.saved) {
           const chExtra = json.chapter_count ? ` (${json.chapter_count} chapters)` : '';
-          showResult({
-            title:    'Saved to output/' + chExtra,
-            filename: json.filename,
-            chars:    json.polly_chars_billed ?? null,
-            costUsd:  json.polly_cost_usd    ?? null,
-          });
+          showResult({ title: 'Saved to output/' + chExtra, filename: json.filename, chars: json.polly_chars_billed ?? null, costUsd: json.polly_cost_usd ?? null });
           return;
         }
       }
 
-      // Otherwise — trigger a real download from the blob
       const blob = await resp.blob();
       const cd   = resp.headers.get('Content-Disposition') || '';
       const match = cd.match(/filename="?([^"]+)"?/);
@@ -1443,11 +1749,8 @@
 
       const url = URL.createObjectURL(blob);
       const a   = document.createElement('a');
-      a.href = url;
-      a.download = fname;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      a.href = url; a.download = fname;
+      document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
 
       showResult({ title: isChapterMode ? 'Your chapter ZIP is downloading' : 'Your MP3 is downloading', filename: fname, chars: null, costUsd: null });
@@ -1460,7 +1763,9 @@
     }
   });
 
-  // ---- Language filter ----
+  /* ============================================================
+     LANGUAGE FILTER
+     ============================================================ */
   const langBtns = document.querySelectorAll('.lang-btn');
   langBtns.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1470,21 +1775,16 @@
       const options = backendSel.querySelectorAll('option');
       let firstVisible = null;
       options.forEach(opt => {
-        if (lang === 'all') {
-          opt.hidden = false;
-          opt.disabled = false;
-        } else {
+        if (lang === 'all') { opt.hidden = false; opt.disabled = false; }
+        else {
           const langs = (opt.dataset.langs || '').split(',');
           const show = langs.includes(lang);
-          opt.hidden = !show;
-          opt.disabled = !show;
+          opt.hidden = !show; opt.disabled = !show;
         }
         if (!opt.hidden && !opt.disabled && !firstVisible) firstVisible = opt;
       });
-      // Hide empty optgroups
       backendSel.querySelectorAll('optgroup').forEach(grp => {
-        const hasVisible = [...grp.querySelectorAll('option')].some(o => !o.hidden);
-        grp.hidden = !hasVisible;
+        grp.hidden = ![...grp.querySelectorAll('option')].some(o => !o.hidden);
       });
       if (backendSel.selectedOptions[0] && backendSel.selectedOptions[0].hidden && firstVisible) {
         backendSel.value = firstVisible.value;
@@ -1493,19 +1793,20 @@
     });
   });
 
-  // ---- Reference audio upload (Voice Cloning page) ----
-  const refUploadZone = document.getElementById('refUploadZone');
-  const refFileInput = document.getElementById('refFileInput');
+  /* ============================================================
+     REFERENCE AUDIO (Voice Cloning page)
+     ============================================================ */
+  const refUploadZone   = document.getElementById('refUploadZone');
+  const refFileInput    = document.getElementById('refFileInput');
   const refUploadStatus = document.getElementById('refUploadStatus');
-  const refList = document.getElementById('refList');
+  const refList         = document.getElementById('refList');
 
   if (refUploadZone) {
     refUploadZone.addEventListener('click', () => refFileInput.click());
     refUploadZone.addEventListener('dragover', e => { e.preventDefault(); refUploadZone.classList.add('dragover'); });
     refUploadZone.addEventListener('dragleave', () => refUploadZone.classList.remove('dragover'));
     refUploadZone.addEventListener('drop', e => {
-      e.preventDefault();
-      refUploadZone.classList.remove('dragover');
+      e.preventDefault(); refUploadZone.classList.remove('dragover');
       if (e.dataTransfer.files.length) uploadRefAudio(e.dataTransfer.files[0]);
     });
     refFileInput.addEventListener('change', () => {
@@ -1518,22 +1819,13 @@
     fd.append('audio', file);
     refUploadStatus.style.display = '';
     refUploadStatus.className = 'flash info';
-    refUploadStatus.textContent = 'Uploading…';
+    refUploadStatus.textContent = 'Uploading\u2026';
     try {
       const resp = await fetch('/api/upload-reference', { method: 'POST', body: fd });
       const data = await resp.json();
-      if (data.error) {
-        refUploadStatus.className = 'flash error';
-        refUploadStatus.textContent = data.error;
-      } else {
-        refUploadStatus.className = 'flash success';
-        refUploadStatus.textContent = `Saved: ${data.filename}`;
-        loadRefVoices();
-      }
-    } catch (e) {
-      refUploadStatus.className = 'flash error';
-      refUploadStatus.textContent = 'Upload failed: ' + e.message;
-    }
+      if (data.error) { refUploadStatus.className = 'flash error'; refUploadStatus.textContent = data.error; }
+      else { refUploadStatus.className = 'flash success'; refUploadStatus.textContent = `Saved: ${data.filename}`; loadRefVoices(); }
+    } catch (e) { refUploadStatus.className = 'flash error'; refUploadStatus.textContent = 'Upload failed: ' + e.message; }
   }
 
   async function loadRefVoices() {
@@ -1551,7 +1843,7 @@
         item.innerHTML = `
           <audio controls src="/reference_audio/${encodeURIComponent(v.filename)}" preload="none"></audio>
           <span class="ref-name">${v.filename}</span>
-          <span class="ref-dur">${v.duration_s ? v.duration_s + 's' : '—'} · ${v.size_kb}KB</span>
+          <span class="ref-dur">${v.duration_s ? v.duration_s + 's' : '\u2014'} \u00b7 ${v.size_kb}KB</span>
         `;
         refList.appendChild(item);
       }
@@ -1568,11 +1860,11 @@
         const sel = document.getElementById(selId);
         if (!sel) return;
         const current = sel.value;
-        sel.innerHTML = '<option value="">— select a reference voice —</option>';
+        sel.innerHTML = '<option value="">\u2014 select a reference voice \u2014</option>';
         for (const v of voices) {
           const opt = document.createElement('option');
           opt.value = v.filename;
-          opt.textContent = `${v.filename} (${v.duration_s ? v.duration_s + 's' : '—'})`;
+          opt.textContent = `${v.filename} (${v.duration_s ? v.duration_s + 's' : '\u2014'})`;
           if (v.filename === current) opt.selected = true;
           sel.appendChild(opt);
         }
@@ -1580,9 +1872,9 @@
     });
   }
 
-  // Load reference voices on page load
+  // Init: load references, set initial states
   loadRefVoices();
+  updateStepStates();
 </script>
-
 </body>
 </html>
