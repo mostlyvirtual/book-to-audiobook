@@ -1572,6 +1572,11 @@ def _get_xtts_model(model_key: str = "base"):
     global _xtts_models
     if model_key not in _xtts_models:
         _auto_install_extra("TTS", "xtts")
+        # coqui-tts uses isin_mps_friendly which was removed in transformers>=4.46
+        import transformers.pytorch_utils as _tpu
+        if not hasattr(_tpu, "isin_mps_friendly"):
+            import torch as _t
+            _tpu.isin_mps_friendly = lambda elements, test_elements: _t.isin(elements, test_elements)
         from TTS.api import TTS as CoquiTTS
         if model_key == "base":
             _report_downloading("XTTS-v2 base (~1.8 GB)")
@@ -1590,6 +1595,11 @@ def _get_xtts_ro_model():
     key = "xtts_ro"
     if key not in _xtts_models:
         _auto_install_extra("TTS", "xtts")
+        # coqui-tts uses isin_mps_friendly which was removed in transformers>=4.46
+        import transformers.pytorch_utils as _tpu
+        if not hasattr(_tpu, "isin_mps_friendly"):
+            import torch as _t
+            _tpu.isin_mps_friendly = lambda elements, test_elements: _t.isin(elements, test_elements)
         from TTS.tts.configs.xtts_config import XttsConfig
         from TTS.tts.models.xtts import Xtts
         from huggingface_hub import snapshot_download
