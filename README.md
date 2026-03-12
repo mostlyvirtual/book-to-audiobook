@@ -69,7 +69,7 @@ uv run python app.py
 - installs `uv` if missing
 - installs `ffmpeg` and `espeak-ng`
 - installs Python 3.12 via `uv`
-- runs `uv sync --dev`
+- runs `uv sync --frozen --dev`
 - creates `.env` from `.env.example` if needed
 
 It currently supports:
@@ -153,13 +153,13 @@ espeak-ng --version
 For the default app experience, including the web app, Kokoro, Polly support, and the fast test suite:
 
 ```bash
-uv sync --dev
+uv sync --frozen --dev
 ```
 
 If you want every optional backend available locally:
 
 ```bash
-uv sync --dev --extra all
+uv sync --frozen --dev --extra all
 ```
 
 ### Optional backend extras
@@ -177,8 +177,8 @@ uv sync --dev --extra all
 Examples:
 
 ```bash
-uv sync --dev --extra piper --extra supertonic
-uv sync --dev --extra xtts --extra ocr
+uv sync --frozen --dev --extra piper --extra supertonic
+uv sync --frozen --dev --extra xtts --extra ocr
 ```
 
 ### 5. Create your local environment file
@@ -217,13 +217,15 @@ http://localhost:1234
 ```bash
 ./scripts/bootstrap.sh
 ./scripts/bootstrap.sh --all
-uv sync --dev
-uv sync --dev --extra all
+uv sync --frozen --dev
+uv sync --frozen --dev --extra all
 uv lock
 uv sync --frozen --dev
 uv run python app.py
 uv run pytest tests/test_smoke.py -q
 ```
+
+Use `uv lock` only when you intentionally want to update the pinned dependency set.
 
 ## Configuration
 

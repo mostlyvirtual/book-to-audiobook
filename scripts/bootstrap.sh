@@ -119,7 +119,11 @@ echo "==> Installing Python ${PYTHON_VERSION} via uv"
 uv python install "$PYTHON_VERSION"
 
 echo "==> Syncing project dependencies"
-uv sync "${SYNC_ARGS[@]}"
+if [[ -f uv.lock ]]; then
+  uv sync --frozen "${SYNC_ARGS[@]}"
+else
+  uv sync "${SYNC_ARGS[@]}"
+fi
 
 if [[ ! -f .env ]]; then
   echo "==> Creating .env from .env.example"

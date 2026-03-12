@@ -1884,7 +1884,10 @@
     const isChapterMode = document.getElementById('chapter_mode').checked;
     if (isChapterMode) fd.set('chapter_mode', '1');
 
-    const jobId = crypto.randomUUID();
+    const jobId = (typeof crypto.randomUUID === 'function')
+      ? crypto.randomUUID()
+      : ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+          (c ^ (Math.random() * 16 >> c / 4)).toString(16));
     fd.set('job_id', jobId);
 
     progressFill.style.width = '0%';
