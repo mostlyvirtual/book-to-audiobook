@@ -166,13 +166,28 @@ def _auto_install_extra(package: str, extra: str) -> None:
             f"Run manually: uv sync --extra {extra}\n"
             f"{result.stderr.strip()}"
         )
-    # invalidate_caches() clears finder caches; reload(site) re-processes
-    # site-packages .pth files so newly installed packages are importable
-    # in the current process without a server restart.
-    import site
+
+    # Make newly-installed packages visible in the current process:
+    # 1. Explicitly ensure the venv site-packages dir is on sys.path
+    #    (uv may have created it after the process started).
+    import sys as _sys
+    venv_sp = Path(_sys.executable).parent.parent / "lib" / f"python{_sys.version_info.major}.{_sys.version_info.minor}" / "site-packages"
+    if venv_sp.is_dir() and str(venv_sp) not in _sys.path:
+        _sys.path.insert(0, str(venv_sp))
+        log.info("Added %s to sys.path", venv_sp)
+    # 2. Clear all FileFinder path-entry caches so the new directories
+    #    are re-scanned on the next import attempt.
     importlib.invalidate_caches()
-    importlib.reload(site)
     log.info("Extra '%s' installed successfully.", extra)
+
+    # Verify the package is now actually findable; warn loudly if not so
+    # the real problem appears in logs rather than a cryptic 400 error.
+    if importlib.util.find_spec(package) is None:
+        log.warning(
+            "Package '%s' still not findable after installing '%s'. "
+            "A server restart may be required (uv sync --extra %s then restart).",
+            package, extra, extra,
+        )
 
 
 def _report_progress(job_id: str | None, current: int, total: int, phase: str = "synth"):
@@ -2713,7 +2728,8 @@ def _convert_chapters(file_stream, source_filename, input_file_name,
             try:
                 result = _do_synthesis(text, backend, synth_params,
                                        on_progress=None)
-            except ImportError:
+            except ImportError as _imp_err:
+                log.warning("ImportError synthesizing '%s' chapter (backend=%s): %s", title, backend, _imp_err)
                 _clear_job(job_id)
                 extra = _BACKEND_EXTRA.get(backend, backend)
                 return _err(f"Backend '{backend}' requires optional dependencies. Run: uv sync --extra {extra}", 400)
@@ -2814,7 +2830,8 @@ def voice_test():
 
     try:
         result = _do_synthesis(text, backend, synth_params)
-    except ImportError:
+    except ImportError as _imp_err:
+        log.warning("ImportError in voice-test (backend=%s): %s", backend, _imp_err)
         extra = _BACKEND_EXTRA.get(backend, backend)
         return _err(f"Backend '{backend}' requires optional dependencies. Run: uv sync --extra {extra}", 400)
     except ValueError as e:
@@ -2928,6 +2945,7 @@ def convert():
         _clear_job(job_id)
         return _err("Conversion was cancelled.", 400)
     except ImportError as e:
+        log.warning("ImportError in /convert (backend=%s): %s", backend, e)
         _clear_job(job_id)
         extra = _BACKEND_EXTRA.get(backend, backend)
         return _err(f"Backend '{backend}' requires optional dependencies. Run: uv sync --extra {extra}", 400)
