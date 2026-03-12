@@ -1342,6 +1342,38 @@ def synthesize_kokoro(text: str, voice: str, speed: float, lang_code: str, on_pr
     return mp3_buf
 
 
+def _sanitize_for_supertonic(text: str) -> str:
+    """Replace characters outside Supertonic's supported set with safe ASCII.
+
+    Supertonic raises ValueError for any character not in its whitelist.
+    Strategy (in order):
+      - Box-drawing / block-element chars (U+2500–U+259F) → ` - ` or space
+      - Horizontal rules (━ ─ ═ etc) → nothing (they're visual separators)
+      - Curly quotes / fancy dashes → straight ASCII equivalents
+      - Remaining non-ASCII outside Latin-1 → stripped
+    """
+    import unicodedata
+    import re
+
+    # Box-drawing heavy/light horizontal lines → skip (they're visual dividers)
+    text = re.sub(r'[\u2500-\u257F]+', ' ', text)
+    # Block elements (▀▄█ etc) → remove
+    text = re.sub(r'[\u2580-\u259F]+', '', text)
+    # Curly quotes → straight
+    text = text.replace('\u2018', "'").replace('\u2019', "'")
+    text = text.replace('\u201c', '"').replace('\u201d', '"')
+    # En/em dashes → hyphen
+    text = text.replace('\u2013', '-').replace('\u2014', '-')
+    # Ellipsis → three dots
+    text = text.replace('\u2026', '...')
+    # Bullet / middle dot → hyphen
+    text = text.replace('\u2022', '-').replace('\u00b7', '-')
+    # Any remaining non-ASCII: try NFKD decomposition, then drop non-ASCII residue
+    normalized = unicodedata.normalize('NFKD', text)
+    text = ''.join(c for c in normalized if ord(c) < 128)
+    return text
+
+
 def synthesize_supertonic(
     text: str,
     voice_name: str,
@@ -1365,7 +1397,11 @@ def synthesize_supertonic(
     Note: First call downloads ~305MB model. Uses pure ONNX, no torch required.
     """
     import numpy as np
-    
+
+    # Supertonic has a strict character whitelist.  Strip/replace any Unicode
+    # outside basic Latin + common punctuation before synthesis.
+    text = _sanitize_for_supertonic(text)
+
     tts = _get_supertonic_tts()
     log.info("Supertonic TTS: voice=%s, lang=%s, speed=%.2f, silence=%.2f, text_len=%d",
              voice_name, lang, speed, silence_duration, len(text))
