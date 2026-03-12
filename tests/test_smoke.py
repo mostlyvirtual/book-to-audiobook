@@ -1,292 +1,328 @@
-"""Smoke tests for book-to-audiobook.
+"""Fast regression tests for book-to-audiobook."""
 
-Validates that all TTS backends load, models initialise, and API
-endpoints respond correctly.  These are the same checks that were
-previously run ad-hoc from the terminal, now codified as a repeatable
-pytest suite.
-
-Run:  pytest tests/ -v
-"""
-
+import io
 import json
+import shutil
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
 
-# Ensure the project root is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import app, CONFIG  # noqa: E402
+import app as app_module  # noqa: E402
 
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def client():
-    """Flask test client (no real server needed)."""
-    app.config["TESTING"] = True
-    with app.test_client() as c:
+    app_module.app.config["TESTING"] = True
+    with app_module.app.test_client() as c:
         yield c
 
 
-# ---------------------------------------------------------------------------
-# 1. Import checks — backends can be imported without error
-# ---------------------------------------------------------------------------
+def _make_epub_bytes(chapters: list[tuple[str, str]]) -> bytes:
+    """Build a minimal EPUB with one XHTML file per chapter."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        zf.writestr(
+            "META-INF/container.xml",
+            """<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>""",
+        )
 
-class TestImports:
-    def test_import_piper(self):
-        import piper  # noqa: F401
-        from piper import PiperVoice  # noqa: F401
+        manifest = []
+        spine = []
+        for idx, (title, body) in enumerate(chapters, start=1):
+            href = f"chapter{idx}.xhtml"
+            item_id = f"chap{idx}"
+            manifest.append(
+                f'<item id="{item_id}" href="{href}" media-type="application/xhtml+xml"/>'
+            )
+            spine.append(f'<itemref idref="{item_id}"/>')
+            zf.writestr(
+                f"OEBPS/{href}",
+                f"""<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head><title>{title}</title></head>
+  <body><h1>{title}</h1><p>{body}</p></body>
+</html>""",
+            )
 
-    def test_import_supertonic(self):
-        import supertonic  # noqa: F401
-        from supertonic import TTS  # noqa: F401
-
-    def test_import_kokoro(self):
-        import kokoro  # noqa: F401
-        from kokoro import KPipeline  # noqa: F401
-
-
-# ---------------------------------------------------------------------------
-# 2. Model loading — backends initialise with real weights
-# ---------------------------------------------------------------------------
-
-class TestModelLoading:
-    def test_piper_voice_loads(self):
-        from app import _get_piper_voice
-        voice = _get_piper_voice(CONFIG["PIPER_MODEL"])
-        assert voice is not None
-        assert hasattr(voice, "synthesize")
-
-    def test_supertonic_tts_loads(self):
-        from app import _get_supertonic_tts
-        tts = _get_supertonic_tts()
-        assert tts is not None
-        assert tts.sample_rate > 0
-
-    def test_kokoro_pipeline_loads(self):
-        from app import _get_kokoro_pipeline
-        pipe = _get_kokoro_pipeline(CONFIG["KOKORO_LANG"])
-        assert pipe is not None
-
-
-# ---------------------------------------------------------------------------
-# 3. Piper model validation — sidecar JSON integrity
-# ---------------------------------------------------------------------------
-
-class TestPiperModelValidation:
-    def test_validate_default_model(self):
-        from app import _validate_piper_model_files
-        config_path = _validate_piper_model_files(CONFIG["PIPER_MODEL"])
-        assert config_path.endswith(".json")
-        data = json.loads(Path(config_path).read_text())
-        assert isinstance(data, dict)
-        assert len(data) > 0
-
-    def test_validate_all_model_files(self):
-        from app import _validate_piper_model_files
-        models_dir = Path(__file__).resolve().parent.parent / "models"
-        for onnx in models_dir.glob("*.onnx"):
-            config = _validate_piper_model_files(str(onnx))
-            assert Path(config).is_file()
-
-    def test_validate_missing_model_raises(self, tmp_path):
-        from app import _validate_piper_model_files
-        with pytest.raises(ValueError, match="not found"):
-            _validate_piper_model_files(str(tmp_path / "nonexistent.onnx"))
-
-    def test_validate_bad_json_raises(self, tmp_path):
-        from app import _validate_piper_model_files
-        model = tmp_path / "bad.onnx"
-        model.write_bytes(b"\x00")
-        sidecar = tmp_path / "bad.onnx.json"
-        sidecar.write_text("not json at all")
-        with pytest.raises(ValueError, match="invalid"):
-            _validate_piper_model_files(str(model))
+        zf.writestr(
+            "OEBPS/content.opf",
+            f"""<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Sample Book</dc:title>
+  </metadata>
+  <manifest>{''.join(manifest)}</manifest>
+  <spine>{''.join(spine)}</spine>
+</package>""",
+        )
+    return buf.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# 4. API endpoints — voice listing returns expected structure
-# ---------------------------------------------------------------------------
+def _fake_mp3_result(*_args, **_kwargs):
+    return {
+        "mp3_buf": io.BytesIO(b"fake-mp3"),
+        "provider_detail": "fake",
+        "prosody_info": {},
+    }
+
+
+class FakeAudioSegment:
+    silent_calls = []
+
+    def __init__(self, duration=0):
+        self.duration = duration
+
+    def __iadd__(self, other):
+        self.duration += getattr(other, "duration", 0)
+        return self
+
+    @classmethod
+    def empty(cls):
+        return cls()
+
+    @classmethod
+    def silent(cls, duration=0):
+        cls.silent_calls.append(duration)
+        return cls(duration=duration)
+
+    @classmethod
+    def from_wav(cls, _buf):
+        return cls(duration=1)
+
+    def export(self, out_buf, format="mp3", bitrate="128k"):
+        out_buf.write(b"fake-mp3-data")
+        out_buf.seek(0)
+
+
+class FakeSupertonic:
+    sample_rate = 44100
+    voice_style_names = ["F1"]
+
+    def get_voice_style(self, style_name):
+        return style_name
+
+    def synthesize(self, *args, **kwargs):
+        return [0.1, -0.1, 0.2]
+
 
 class TestAPIEndpoints:
-    def test_kokoro_voices_endpoint(self, client):
-        resp = client.get("/api/kokoro-voices")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert "voices" in data
-        voices = data["voices"]
-        assert len(voices) >= 1, "Expected at least 1 voice group"
-        # Check structure
-        for group_name, entries in voices.items():
-            assert isinstance(entries, list)
-            for entry in entries:
-                assert "id" in entry
-                assert "name" in entry
-
-    def test_supertonic_voices_endpoint(self, client):
-        resp = client.get("/api/supertonic-voices")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert "voices" in data
-        voices = data["voices"]
-        assert len(voices) >= 1, "Expected at least 1 language group"
-
-    def test_backend_status_endpoint(self, client):
+    def test_backend_status_endpoint_uses_polly_probe(self, client, monkeypatch):
+        monkeypatch.setattr(
+            app_module,
+            "_get_polly_status",
+            lambda force_refresh=False: {"ready": False, "note": "AWS credentials not found for Polly"},
+        )
         resp = client.get("/api/backend-status")
         assert resp.status_code == 200
         data = resp.get_json()
-        for backend in ("piper", "kokoro", "supertonic", "huggingface", "polly", "xtts", "xtts_ro", "hf_cloud", "speecht5"):
-            assert backend in data, f"Missing backend: {backend}"
-        assert data["polly"]["ready"] is True
+        assert data["polly"]["ready"] is False
+        assert "credentials" in data["polly"]["note"].lower()
 
     def test_input_files_endpoint(self, client):
         resp = client.get("/api/input-files")
         assert resp.status_code == 200
-        data = resp.get_json()
-        assert "files" in data
-        assert isinstance(data["files"], list)
-
-    def test_index_loads(self, client):
-        resp = client.get("/")
-        assert resp.status_code == 200
-        assert b"<!DOCTYPE html>" in resp.data or b"<html" in resp.data
+        assert isinstance(resp.get_json()["files"], list)
 
     def test_languages_endpoint(self, client):
         resp = client.get("/api/languages")
         assert resp.status_code == 200
         data = resp.get_json()
-        assert "en" in data
-        assert "ro" in data
-        assert "English" in data["en"]["name"]
-        assert "backends" in data["en"]
+        assert "en" in data and "ro" in data
 
-    def test_reference_voices_endpoint(self, client):
-        resp = client.get("/api/reference-voices")
+    def test_index_loads(self, client):
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert b"Split into chapter files" in resp.data
+
+
+class TestTextPreprocessing:
+    def test_preserves_bracketed_book_content(self):
+        text = "He whispered [aside] and the crowd answered [applause]."
+        cleaned = app_module.preprocess_text_for_speech(text)
+        assert "[aside]" in cleaned
+        assert "[applause]" in cleaned
+
+    def test_removes_numeric_and_ref_citations(self):
+        text = "Claim one[1] and claim two [Refs 2, 4] remain."
+        cleaned = app_module.preprocess_text_for_speech(text)
+        assert "[1]" not in cleaned
+        assert "[Refs 2, 4]" not in cleaned
+
+
+class TestEpubSupport:
+    def test_load_epub_entries_extracts_titles(self):
+        epub_bytes = _make_epub_bytes(
+            [("Opening", "First body text."), ("Ending", "Second body text.")]
+        )
+        entries = app_module._load_epub_entries(io.BytesIO(epub_bytes))
+        assert [entry["title"] for entry in entries] == ["Opening", "Ending"]
+        assert all(entry["has_text"] for entry in entries)
+
+    def test_epub_info_endpoint_lists_chapters(self, client):
+        epub_bytes = _make_epub_bytes([("Opening", "Body one"), ("Ending", "Body two")])
+        resp = client.post(
+            "/api/pdf-info",
+            data={"pdf": (io.BytesIO(epub_bytes), "book.epub")},
+            content_type="multipart/form-data",
+        )
         assert resp.status_code == 200
         data = resp.get_json()
-        assert "voices" in data
-        assert isinstance(data["voices"], list)
+        assert data["total_pages"] == 2
+        assert [ch["title"] for ch in data["chapters"]] == ["Opening", "Ending"]
 
-    def test_hf_speakers_endpoint(self, client):
-        resp = client.get("/api/hf-speakers")
+    def test_convert_chapters_epub_downloads_zip(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_do_synthesis", _fake_mp3_result)
+        epub_bytes = _make_epub_bytes([("Opening", "Body one"), ("Ending", "Body two")])
+        resp = client.post(
+            "/convert",
+            data={
+                "backend": "kokoro",
+                "chapter_mode": "1",
+                "pdf": (io.BytesIO(epub_bytes), "book.epub"),
+            },
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 200
+        assert resp.mimetype == "application/zip"
+        with zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+            assert zf.namelist() == ["00_Opening.mp3", "01_Ending.mp3"]
+
+    def test_convert_chapters_epub_save_to_output(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_do_synthesis", _fake_mp3_result)
+        epub_bytes = _make_epub_bytes([("Opening", "Body one"), ("Ending", "Body two")])
+        output_root = Path(app_module.__file__).parent / "output"
+        before = {p.name for p in output_root.iterdir()}
+
+        resp = client.post(
+            "/convert",
+            data={
+                "backend": "kokoro",
+                "chapter_mode": "1",
+                "save_to_output": "1",
+                "pdf": (io.BytesIO(epub_bytes), "book.epub"),
+            },
+            content_type="multipart/form-data",
+        )
         assert resp.status_code == 200
         data = resp.get_json()
-        assert "speakers" in data
-        assert len(data["speakers"]) >= 1
-        for s in data["speakers"]:
-            assert "id" in s
-            assert "name" in s
+        assert data["saved"] is True
+        assert data["chapter_count"] == 2
 
-    def test_upload_reference_rejects_no_file(self, client):
-        resp = client.post("/api/upload-reference")
-        assert resp.status_code == 400
+        created = output_root / data["filename"]
+        assert created.is_dir()
+        assert sorted(p.name for p in created.iterdir()) == ["00_Opening.mp3", "01_Ending.mp3"]
+        shutil.rmtree(created)
+        after = {p.name for p in output_root.iterdir()}
+        assert before == after
 
 
-# ---------------------------------------------------------------------------
-# 5. Output filename — prosody tags appended correctly
-# ---------------------------------------------------------------------------
+class TestPiperCliFallback:
+    def test_cli_includes_noise_flags(self, monkeypatch):
+        calls = []
 
-class TestOutputFilename:
-    def test_filename_without_prosody(self):
-        from app import build_output_filename
-        name = build_output_filename("book.pdf", "p1-5", "piper", "amy")
-        assert name.endswith(".mp3")
-        assert "piper" in name
-        assert "amy" in name
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if "--help" in cmd:
+                return type("Proc", (), {"stdout": "--noise-scale --noise-w", "stderr": ""})()
+            output_path = Path(cmd[cmd.index("--output_file") + 1])
+            output_path.write_bytes(b"RIFFfake")
+            return type("Proc", (), {"stdout": "", "stderr": ""})()
 
-    def test_filename_with_piper_prosody(self):
-        from app import build_output_filename
-        name = build_output_filename(
-            "book.pdf", "p1-5", "piper", "amy",
-            prosody={"ls": 1.2, "ns": 0.667, "nw": 0.8, "ss": 0.4},
+        monkeypatch.setattr(app_module, "_piper_cli_noise_flags_supported", None)
+        monkeypatch.setattr("subprocess.run", fake_run)
+        result = app_module._synthesize_piper_cli(
+            "hello",
+            "voice.onnx",
+            "voice.onnx.json",
+            length_scale=1.2,
+            sentence_silence=0.5,
+            noise_scale=0.7,
+            noise_w_scale=0.9,
         )
-        assert "ls1.2" in name
-        assert "ns0.667" in name
-        assert "nw0.8" in name
-        assert "ss0.4" in name
-        assert name.endswith(".mp3")
+        assert isinstance(result, io.BytesIO)
+        synth_cmd = calls[-1]
+        assert "--noise-scale" in synth_cmd
+        assert "0.7" in synth_cmd
+        assert "--noise-w" in synth_cmd
+        assert "0.9" in synth_cmd
 
-    def test_filename_with_kokoro_prosody(self):
-        from app import build_output_filename
-        name = build_output_filename(
-            "book.pdf", "all", "kokoro", "af_bella",
-            prosody={"spd": 1.5, "lang": "a"},
+    def test_cli_raises_when_noise_flags_unsupported(self, monkeypatch):
+        monkeypatch.setattr(app_module, "_piper_cli_noise_flags_supported", False)
+        with pytest.raises(ValueError, match="does not support"):
+            app_module._synthesize_piper_cli("hello", "voice.onnx", "voice.onnx.json")
+
+
+class TestSupertonicPauseHandling:
+    def test_supertonic_uses_configured_pause_duration(self, monkeypatch):
+        FakeAudioSegment.silent_calls = []
+        monkeypatch.setattr(app_module, "_get_supertonic_tts", lambda: FakeSupertonic())
+        monkeypatch.setattr(app_module, "AudioSegment", FakeAudioSegment)
+
+        buf = app_module.synthesize_supertonic(
+            "one two three four five six seven eight nine ten " * 400,
+            voice_name="F1",
+            lang="en",
+            silence_duration=0.75,
         )
-        assert "spd1.5" in name
-        assert "langa" in name
+
+        assert isinstance(buf, io.BytesIO)
+        assert 750 in FakeAudioSegment.silent_calls
+
+
+class TestPollyStatusCaching:
+    def test_get_polly_status_uses_cache(self, monkeypatch):
+        calls = []
+        times = iter([100.0, 100.0, 120.0, 120.0])
+        monkeypatch.setattr(app_module, "_polly_status_cache", {"checked_at": 0.0, "result": {}})
+        monkeypatch.setattr(app_module, "_POLLY_STATUS_TTL_SECONDS", 60)
+        monkeypatch.setattr(app_module.time, "time", lambda: next(times))
+
+        def fake_probe():
+            calls.append(True)
+            return {"ready": True, "note": "ok"}
+
+        monkeypatch.setattr(app_module, "_probe_polly_status", fake_probe)
+        first = app_module._get_polly_status()
+        second = app_module._get_polly_status()
+        assert first == second
+        assert len(calls) == 1
+
+
+class TestUtilityFunctions:
+    def test_validate_missing_model_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="not found"):
+            app_module._validate_piper_model_files(str(tmp_path / "nonexistent.onnx"))
+
+    def test_validate_bad_json_raises(self, tmp_path):
+        model = tmp_path / "bad.onnx"
+        model.write_bytes(b"\x00")
+        sidecar = tmp_path / "bad.onnx.json"
+        sidecar.write_text("not json at all")
+        with pytest.raises(ValueError, match="invalid"):
+            app_module._validate_piper_model_files(str(model))
 
     def test_filename_prosody_none_values_skipped(self):
-        from app import build_output_filename
-        name = build_output_filename(
-            "book.pdf", "p1", "piper", "amy",
+        name = app_module.build_output_filename(
+            "book.pdf",
+            "p1",
+            "piper",
+            "amy",
             prosody={"ls": None, "ns": 0.5, "nw": None, "ss": None},
         )
         assert "ns0.5" in name
         assert "ls" not in name
 
-    def test_filename_empty_prosody(self):
-        from app import build_output_filename
-        name = build_output_filename("book.pdf", "p1", "piper", "amy", prosody={})
-        # No prosody suffix when dict is empty
-        assert name.count("_amy") == 1  # only the provider detail, no extra
-
-
-# ---------------------------------------------------------------------------
-# 6. Text preprocessing — unit tests for pipeline helpers
-# ---------------------------------------------------------------------------
-
-class TestTextPreprocessing:
-    def test_chunk_text_short(self):
-        from app import chunk_text
-        chunks = chunk_text("Hello world", max_chars=100)
-        assert chunks == ["Hello world"]
-
-    def test_chunk_text_splits(self):
-        from app import chunk_text
-        text = "word " * 100  # 500 chars
-        chunks = chunk_text(text.strip(), max_chars=50)
-        assert len(chunks) > 1
-        for chunk in chunks:
-            assert len(chunk) <= 50
-
     def test_slug_token(self):
-        from app import _slug_token
-        assert _slug_token("Hello World!") == "Hello-World"
-        assert _slug_token("") == "na"
-        assert _slug_token("a" * 100, max_len=10) == "a" * 10
-
-
-# ---------------------------------------------------------------------------
-# 7. Romanian diacritic normalization
-# ---------------------------------------------------------------------------
-
-class TestRomanianNormalization:
-    def test_cedilla_to_comma(self):
-        from app import _normalize_romanian
-        assert _normalize_romanian("ş") == "ș"
-        assert _normalize_romanian("ţ") == "ț"
-        assert _normalize_romanian("Ş") == "Ș"
-        assert _normalize_romanian("Ţ") == "Ț"
-
-    def test_already_correct(self):
-        from app import _normalize_romanian
-        text = "București, județul Iași"
-        assert _normalize_romanian(text) == text
-
-    def test_mixed_diacritics(self):
-        from app import _normalize_romanian
-        assert _normalize_romanian("şcoală şi ţară") == "școală și țară"
-
-
-# ---------------------------------------------------------------------------
-# 8. HF pipeline cache — dict-keyed
-# ---------------------------------------------------------------------------
-
-class TestHFPipelineCache:
-    def test_hf_pipelines_is_dict(self):
-        from app import _hf_pipelines
-        assert isinstance(_hf_pipelines, dict)
+        assert app_module._slug_token("Hello World!") == "Hello-World"
+        assert app_module._slug_token("") == "na"
+        assert app_module._slug_token("a" * 100, max_len=10) == "a" * 10

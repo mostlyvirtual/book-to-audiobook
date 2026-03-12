@@ -57,7 +57,7 @@ from pydub import AudioSegment
 
 CONFIG = {
     # General
-    "DEFAULT_BACKEND": os.getenv("TTS_BACKEND", "piper"),
+    "DEFAULT_BACKEND": os.getenv("TTS_BACKEND", "kokoro"),
     # Amazon Polly
     "POLLY_VOICE_ID": os.getenv("POLLY_VOICE_ID", "Joanna"),
     "POLLY_ENGINE": os.getenv("POLLY_ENGINE", "neural"),
@@ -74,7 +74,7 @@ CONFIG = {
     # Hugging Face
     "HF_MODEL": os.getenv("HF_MODEL", "facebook/mms-tts-eng"),
     # Kokoro
-    "KOKORO_VOICE": os.getenv("KOKORO_VOICE", "af_bella"),
+    "KOKORO_VOICE": os.getenv("KOKORO_VOICE", "am_michael"),
     "KOKORO_SPEED": float(os.getenv("KOKORO_SPEED", "1.0")),
     "KOKORO_LANG": os.getenv("KOKORO_LANG", "a"),
     # Supertonic
@@ -138,6 +138,12 @@ _kokoro_pipelines: dict[str, object] = {}
 _supertonic_tts = None
 _xtts_models: dict[str, object] = {}
 _speecht5_cache: dict[str, object] = {}
+_piper_cli_noise_flags_supported: bool | None = None
+_polly_status_cache = {
+    "checked_at": 0.0,
+    "result": {"ready": False, "note": "Checking AWS credentials..."},
+}
+_POLLY_STATUS_TTL_SECONDS = 60
 
 
 def _validate_piper_model_files(model_path: str) -> str:
@@ -374,12 +380,16 @@ def _convert_numbers(text: str) -> str:
 def _remove_artifacts(text: str) -> str:
     """Remove extraction artifacts: citations, page numbers, URLs.
     
-    Strips: [1], [Ref], page numbers, URLs, and common metadata junk.
+    Strips citation-like brackets, page numbers, and URLs while preserving
+    normal bracketed prose.
     """
-    # Remove citation brackets: [1], [2], [Ref 45], etc.
-    text = re.sub(r'\[\d+\]', '', text)
-    text = re.sub(r'\[[Rr]ef\s*\d+\]', '', text)
-    text = re.sub(r'\[[\w\s,]+\]', '', text)
+    # Remove citation brackets: [1], [1, 2], [1-3], [Ref 45], [Refs 2, 4]
+    citation_patterns = (
+        r"\[(?:\d+\s*(?:[,;-]\s*\d+\s*)*)\]",
+        r"\[(?:ref|refs|reference|references)\s+\d+(?:\s*(?:[,;-]\s*\d+\s*)*)\]",
+    )
+    for pattern in citation_patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
     
     # Remove URLs
     text = re.sub(r'https?://\S+', '', text)
@@ -655,102 +665,115 @@ def extract_text_from_pdf(file_stream, page_range_str: str) -> tuple[str, str]:
     return cleaned, label
 
 
+def _load_epub_entries(file_stream) -> list[dict]:
+    """Return EPUB spine entries with extracted text and display titles."""
+    import zipfile
+    from xml.etree import ElementTree as ET
+    from bs4 import BeautifulSoup
+
+    if hasattr(file_stream, "seek"):
+        file_stream.seek(0)
+
+    with zipfile.ZipFile(file_stream) as zf:
+        try:
+            container_xml = zf.read("META-INF/container.xml")
+            root = ET.fromstring(container_xml)
+            rootfile = root.find(".//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile")
+            if rootfile is None:
+                raise ValueError("Invalid EPUB: no rootfile found")
+            opf_path = rootfile.get("full-path")
+            if not opf_path:
+                raise ValueError("Invalid EPUB: rootfile has no full-path")
+        except (KeyError, ET.ParseError) as e:
+            raise ValueError(f"Invalid EPUB: could not parse container: {e}")
+
+        try:
+            opf_xml = zf.read(opf_path)
+            opf_root = ET.fromstring(opf_xml)
+        except (KeyError, ET.ParseError) as e:
+            raise ValueError(f"Invalid EPUB: could not parse OPF: {e}")
+
+        ns = {
+            "opf": "http://www.idpf.org/2007/opf",
+            "dc": "http://purl.org/dc/elements/1.1/",
+        }
+        manifest: dict[str, dict] = {}
+        for item in opf_root.findall(".//opf:item", ns):
+            item_id = item.get("id")
+            href = item.get("href")
+            if item_id and href:
+                manifest[item_id] = {"href": href}
+
+        spine_ids = []
+        for itemref in opf_root.findall(".//opf:itemref", ns):
+            item_id = itemref.get("idref")
+            if item_id in manifest:
+                spine_ids.append(item_id)
+
+        if not spine_ids:
+            raise ValueError("EPUB has no content spine")
+
+        metadata_title = opf_root.findtext(".//dc:title", default="", namespaces=ns).strip()
+        opf_dir = Path(opf_path).parent
+        entries: list[dict] = []
+
+        for idx, item_id in enumerate(spine_ids, start=1):
+            full_path = (opf_dir / manifest[item_id]["href"]).as_posix()
+            title = f"Chapter {idx}"
+            text = ""
+            try:
+                content = zf.read(full_path)
+                soup = BeautifulSoup(content, "html.parser")
+                for el in soup(["script", "style"]):
+                    el.decompose()
+
+                for tag in soup.find_all(["h1", "h2", "h3", "title"]):
+                    candidate = tag.get_text(" ", strip=True)
+                    if candidate:
+                        title = candidate
+                        break
+
+                text = soup.get_text(separator="\n").strip()
+                if metadata_title and title == metadata_title:
+                    title = f"Chapter {idx}"
+            except KeyError:
+                log.warning("EPUB: item not found at %s", full_path)
+
+            entries.append({
+                "page": idx,
+                "title": title,
+                "text": text,
+                "chars": len(text),
+                "has_text": len(text) > 20,
+            })
+
+        return entries
+
+
 def extract_text_from_epub(file_stream, page_range_str: str) -> tuple[str, str]:
     """Extract and preprocess text from selected EPUB chapters.
     
     For EPUB, "pages" are actually spine items (chapters/sections).
     Supports page_range like "all", "1-5", "3".
     """
-    import zipfile
-    from xml.etree import ElementTree as ET
-    from bs4 import BeautifulSoup
-    
     try:
-        # Parse EPUB as ZIP
-        with zipfile.ZipFile(file_stream) as zf:
-            # Step 1: Find OPF file path from container.xml
-            try:
-                container_xml = zf.read('META-INF/container.xml')
-                root = ET.fromstring(container_xml)
-                # Find the rootfile element in the OPF namespace
-                rootfile = root.find('.//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile')
-                if rootfile is None:
-                    raise ValueError("No rootfile found in container.xml")
-                opf_path = rootfile.get('full-path')
-                if not opf_path:
-                    raise ValueError("rootfile has no full-path attribute")
-            except (KeyError, ET.ParseError) as e:
-                raise ValueError(f"Invalid EPUB: could not find OPF file: {e}")
-            
-            # Step 2: Parse OPF to get spine order
-            try:
-                opf_xml = zf.read(opf_path)
-                opf_root = ET.fromstring(opf_xml)
-                # Define namespace
-                ns = {'opf': 'http://www.idpf.org/2007/opf'}
-                
-                # Get manifest items
-                manifest = {}
-                for item in opf_root.findall('.//opf:item', ns):
-                    item_id = item.get('id')
-                    href = item.get('href')
-                    manifest[item_id] = href
-                
-                # Get spine order
-                spine_items = []
-                for itemref in opf_root.findall('.//opf:itemref', ns):
-                    item_id = itemref.get('idref')
-                    if item_id in manifest:
-                        spine_items.append(manifest[item_id])
-            except (KeyError, ET.ParseError) as e:
-                raise ValueError(f"Invalid EPUB: could not parse OPF: {e}")
-            
-            if not spine_items:
-                raise ValueError("EPUB has no content spine")
-            
-            # Step 3: Parse page range
-            total_items = len(spine_items)
-            indices = parse_page_range(page_range_str, total_items)
-            
-            # Step 4: Extract text from selected spine items
-            parts = []
-            opf_dir = str(Path(opf_path).parent)
-            
-            for idx in indices:
-                item_path = spine_items[idx]
-                # Resolve relative path
-                full_path = (Path(opf_dir) / item_path).as_posix()
-                
-                try:
-                    content = zf.read(full_path)
-                    # Parse HTML/XHTML
-                    soup = BeautifulSoup(content, 'html.parser')
-                    # Remove script and style elements
-                    for el in soup(['script', 'style']):
-                        el.decompose()
-                    # Extract text
-                    text = soup.get_text(separator='\n')
-                    parts.append(text)
-                except KeyError:
-                    log.warning(f"EPUB: item not found at {full_path}")
-                    continue
-            
-            if not parts:
-                raise ValueError("No readable content found in EPUB")
-            
-            raw = "\n".join(parts)
-            cleaned = preprocess_text_for_speech(raw)
-            
-            # Create label
-            if page_range_str.strip().lower() == "all":
-                label = "all"
-            elif len(indices) == 1:
-                label = f"ch{indices[0]+1}"
-            else:
-                label = f"ch{indices[0]+1}-{indices[-1]+1}"
-            
-            return cleaned, label
-    
+        entries = _load_epub_entries(file_stream)
+        indices = parse_page_range(page_range_str, len(entries))
+        parts = [entries[idx]["text"] for idx in indices if entries[idx]["text"].strip()]
+        if not parts:
+            raise ValueError("No readable content found in EPUB")
+
+        raw = "\n".join(parts)
+        cleaned = preprocess_text_for_speech(raw)
+
+        if page_range_str.strip().lower() == "all":
+            label = "all"
+        elif len(indices) == 1:
+            label = f"ch{indices[0]+1}"
+        else:
+            label = f"ch{indices[0]+1}-{indices[-1]+1}"
+
+        return cleaned, label
     except Exception as e:
         log.exception("EPUB extraction failed")
         raise ValueError(f"Failed to extract EPUB: {e}")
@@ -932,7 +955,15 @@ def synthesize_piper(
 
     except Exception as e:
         log.warning("Piper Python API failed (%s), falling back to CLI", e)
-        wav_buf = _synthesize_piper_cli(text, model_path, config_path, ls, ss)
+        wav_buf = _synthesize_piper_cli(
+            text,
+            model_path,
+            config_path,
+            length_scale=ls,
+            sentence_silence=ss,
+            noise_scale=ns,
+            noise_w_scale=nws,
+        )
 
     wav_buf.seek(0)
     segment = AudioSegment.from_wav(wav_buf)
@@ -944,25 +975,37 @@ def synthesize_piper(
 
 def _synthesize_piper_cli(
     text: str, model_path: str, config_path: str,
-    length_scale: float = 1.0, sentence_silence: float = 0.4,
+    length_scale: float = 1.0,
+    sentence_silence: float = 0.4,
+    noise_scale: float = 0.667,
+    noise_w_scale: float = 0.8,
 ) -> io.BytesIO:
     """Fallback: call the piper CLI binary with prosody flags."""
     import subprocess
 
     piper_bin = CONFIG["PIPER_BINARY"]
-    log.info("Piper CLI: binary=%s, model=%s, length_scale=%.2f, sentence_silence=%.2f",
-             piper_bin, model_path, length_scale, sentence_silence)
+    log.info(
+        "Piper CLI: binary=%s, model=%s, length_scale=%.2f, sentence_silence=%.2f, noise_scale=%.3f, noise_w_scale=%.3f",
+        piper_bin, model_path, length_scale, sentence_silence, noise_scale, noise_w_scale,
+    )
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_path = tmp.name
 
     try:
+        if not _piper_cli_supports_noise_flags(piper_bin):
+            raise ValueError(
+                "The installed Piper CLI does not support --noise-scale/--noise-w. "
+                "Use the Python API path or upgrade Piper CLI."
+            )
         cmd = [
             piper_bin,
             "--model", model_path,
             "--config", config_path,
             "--output_file", tmp_path,
             "--length-scale", str(length_scale),
+            "--noise-scale", str(noise_scale),
+            "--noise-w", str(noise_w_scale),
             "--sentence-silence", str(sentence_silence),
         ]
         proc = subprocess.run(
@@ -980,6 +1023,34 @@ def _synthesize_piper_cli(
         return buf
     finally:
         Path(tmp_path).unlink(missing_ok=True)
+
+
+def _piper_cli_supports_noise_flags(piper_bin: str) -> bool:
+    """Detect whether the installed Piper CLI supports noise tuning flags."""
+    global _piper_cli_noise_flags_supported
+    if _piper_cli_noise_flags_supported is not None:
+        return _piper_cli_noise_flags_supported
+
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [piper_bin, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except FileNotFoundError as e:
+        raise ValueError(f"Piper CLI binary not found: {piper_bin}") from e
+    except Exception as e:
+        raise ValueError(f"Failed to inspect Piper CLI flags: {e}") from e
+
+    help_text = f"{proc.stdout}\n{proc.stderr}"
+    _piper_cli_noise_flags_supported = (
+        "--noise-scale" in help_text and ("--noise-w" in help_text or "--noise-w-scale" in help_text)
+    )
+    return _piper_cli_noise_flags_supported
 
 
 def synthesize_huggingface(text: str, model_name: str, on_progress=None) -> io.BytesIO:
@@ -1132,7 +1203,7 @@ def synthesize_supertonic(
     # Chunk text
     chunks = chunk_text(text, 3000)
     combined = AudioSegment.empty()
-    silence = AudioSegment.silent(duration=400)
+    silence = AudioSegment.silent(duration=max(0, int(silence_duration * 1000)))
     
     # Resolve configured style once; fallback to first available style if missing.
     style_names = list(getattr(tts, "voice_style_names", []) or [])
@@ -1535,7 +1606,7 @@ LANGUAGE_REGISTRY = {
     "en": {
         "name": "English",
         "backends": ["piper", "kokoro", "supertonic", "huggingface", "xtts", "polly", "hf_cloud"],
-        "default_backend": "piper",
+        "default_backend": "kokoro",
     },
     "ro": {
         "name": "Romanian",
@@ -1587,9 +1658,13 @@ def index():
             p.name for p in input_dir.glob("*")
             if p.suffix.lower() in {".pdf", ".epub"}
         )
+    # Resolve the display name for the default Kokoro voice so the
+    # template can pre-render the review card without waiting for JS.
+    kokoro_voice_name = _KOKORO_VOICE_NAMES.get(CONFIG["KOKORO_VOICE"], CONFIG["KOKORO_VOICE"])
     return render_template(
         "index.html",
         config=CONFIG,
+        kokoro_voice_name=kokoro_voice_name,
         onnx_models=onnx_models,
         input_books=input_books,
     )
@@ -1598,6 +1673,64 @@ def index():
 def _err(msg: str, status: int = 400):
     """Return a JSON error so the fetch-based frontend can display it."""
     return jsonify({"error": msg}), status
+
+
+def _get_polly_status(force_refresh: bool = False) -> dict:
+    """Check Polly readiness with a short TTL cache to avoid noisy probes."""
+    now = time.time()
+    if not force_refresh and (now - _polly_status_cache["checked_at"]) < _POLLY_STATUS_TTL_SECONDS:
+        return _polly_status_cache["result"]
+
+    result = _probe_polly_status()
+    _polly_status_cache["checked_at"] = now
+    _polly_status_cache["result"] = result
+    return result
+
+
+def _probe_polly_status() -> dict:
+    """Resolve AWS credentials and validate them with a lightweight AWS call."""
+    try:
+        import boto3
+        from botocore.config import Config as BotoConfig
+        from botocore.exceptions import (
+            BotoCoreError,
+            ClientError,
+            EndpointConnectionError,
+            NoCredentialsError,
+            PartialCredentialsError,
+        )
+    except ImportError:
+        return {"ready": False, "note": "boto3 is not installed"}
+
+    session = boto3.Session(region_name=CONFIG["AWS_REGION"])
+    creds = session.get_credentials()
+    if creds is None:
+        return {"ready": False, "note": "AWS credentials not found for Polly"}
+
+    frozen = creds.get_frozen_credentials()
+    if not frozen.access_key or not frozen.secret_key:
+        return {"ready": False, "note": "AWS credentials are incomplete for Polly"}
+
+    try:
+        sts = session.client(
+            "sts",
+            config=BotoConfig(connect_timeout=2, read_timeout=3, retries={"max_attempts": 0}),
+        )
+        sts.get_caller_identity()
+        return {"ready": True, "note": "AWS credentials validated for Polly"}
+    except NoCredentialsError:
+        return {"ready": False, "note": "AWS credentials not found for Polly"}
+    except PartialCredentialsError:
+        return {"ready": False, "note": "AWS credentials are incomplete for Polly"}
+    except EndpointConnectionError:
+        return {"ready": False, "note": "Could not reach AWS STS to validate Polly credentials"}
+    except ClientError as e:
+        err = e.response.get("Error", {})
+        code = err.get("Code", "ClientError")
+        message = err.get("Message", "AWS rejected the credentials")
+        return {"ready": False, "note": f"Polly auth failed: {code} - {message}"}
+    except BotoCoreError as e:
+        return {"ready": False, "note": f"Polly validation failed: {e}"}
 
 
 @app.route("/api/backend-status")
@@ -1626,6 +1759,7 @@ def api_backend_status():
     xtts_ro_ready = _has_hf_model("eduardem/xtts-v2-romanian")
     speecht5_ready = _has_hf_model("microsoft/speecht5_tts")
     hf_cloud_ready = bool(os.getenv("HF_TOKEN", "").strip())
+    polly_status = _get_polly_status()
 
     return jsonify({
         "piper": {"ready": piper_ready, "note": "ONNX models in models/ folder"},
@@ -1636,7 +1770,7 @@ def api_backend_status():
         "xtts_ro": {"ready": xtts_ro_ready, "note": "Downloads ~1.8GB Romanian fine-tune on first use"},
         "speecht5": {"ready": speecht5_ready, "note": "Downloads ~300MB SpeechT5 model on first use"},
         "hf_cloud": {"ready": hf_cloud_ready, "note": "Requires HF_TOKEN in .env"},
-        "polly": {"ready": True, "note": "Cloud API — no local model needed"},
+        "polly": polly_status,
     })
 
 
@@ -1732,48 +1866,50 @@ def api_polly_voices():
         return jsonify({"error": str(e), "voices": []})
 
 
+# Kokoro voice catalogue — single source of truth used by both the API
+# endpoint and the index route (to pre-render the review card label).
+KOKORO_VOICES: dict[str, list[dict]] = {
+    "American Female": [
+        {"id": "af_bella",   "name": "Bella"},
+        {"id": "af_emma",    "name": "Emma"},
+        {"id": "af_liam",    "name": "Liam"},
+        {"id": "af_alice",   "name": "Alice"},
+        {"id": "af_lily",    "name": "Lily"},
+        {"id": "af_sarah",   "name": "Sarah"},
+        {"id": "af_maya",    "name": "Maya"},
+    ],
+    "American Male": [
+        {"id": "am_adam",    "name": "Adam"},
+        {"id": "am_michael", "name": "Michael"},
+        {"id": "am_brian",   "name": "Brian"},
+        {"id": "am_jack",    "name": "Jack"},
+        {"id": "am_david",   "name": "David"},
+    ],
+    "British Female": [
+        {"id": "bf_emma",    "name": "Emma"},
+        {"id": "bf_lily",    "name": "Lily"},
+        {"id": "bf_alice",   "name": "Alice"},
+        {"id": "bf_rose",    "name": "Rose"},
+    ],
+    "British Male": [
+        {"id": "bm_james",   "name": "James"},
+        {"id": "bm_oliver",  "name": "Oliver"},
+        {"id": "bm_george",  "name": "George"},
+    ],
+}
+
+# Flat id→name lookup derived from the catalogue above.
+_KOKORO_VOICE_NAMES: dict[str, str] = {
+    v["id"]: v["name"]
+    for voices in KOKORO_VOICES.values()
+    for v in voices
+}
+
+
 @app.route("/api/kokoro-voices")
 def api_kokoro_voices():
-    """Return available Kokoro voices grouped by accent.
-    
-    Kokoro has ~25 voices across American, British, and other accents.
-    Format: {accent}_{name} or {accent}_{gender}_{quality}
-    """
-    try:
-        # Hardcoded Kokoro voices (language-agnostic IDs)
-        voices = {
-            "American Female": [
-                {"id": "af_bella", "name": "Bella"},
-                {"id": "af_emma", "name": "Emma"},
-                {"id": "af_liam", "name": "Liam"},
-                {"id": "af_alice", "name": "Alice"},
-                {"id": "af_lily", "name": "Lily"},
-                {"id": "af_sarah", "name": "Sarah"},
-                {"id": "af_maya", "name": "Maya"},
-            ],
-            "American Male": [
-                {"id": "am_adam", "name": "Adam"},
-                {"id": "am_michael", "name": "Michael"},
-                {"id": "am_brian", "name": "Brian"},
-                {"id": "am_jack", "name": "Jack"},
-                {"id": "am_david", "name": "David"},
-            ],
-            "British Female": [
-                {"id": "bf_emma", "name": "Emma"},
-                {"id": "bf_lily", "name": "Lily"},
-                {"id": "bf_alice", "name": "Alice"},
-                {"id": "bf_rose", "name": "Rose"},
-            ],
-            "British Male": [
-                {"id": "bm_james", "name": "James"},
-                {"id": "bm_oliver", "name": "Oliver"},
-                {"id": "bm_george", "name": "George"},
-            ],
-        }
-        return jsonify({"voices": voices})
-    except Exception as e:
-        log.warning("Failed to fetch Kokoro voices: %s", e)
-        return jsonify({"error": str(e), "voices": {}})
+    """Return available Kokoro voices grouped by accent."""
+    return jsonify({"voices": KOKORO_VOICES})
 
 
 @app.route("/api/supertonic-voices")
@@ -1955,85 +2091,13 @@ def _api_pdf_info_impl(file_stream, filename: str):
 
 def _api_epub_info(file_stream, filename: str):
     """EPUB-specific info extraction."""
-    import zipfile
-    from xml.etree import ElementTree as ET
-    from bs4 import BeautifulSoup
-    
     try:
-        with zipfile.ZipFile(file_stream) as zf:
-            # Find OPF
-            try:
-                container_xml = zf.read('META-INF/container.xml')
-                root = ET.fromstring(container_xml)
-                rootfile = root.find('.//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile')
-                if rootfile is None:
-                    return _err("Invalid EPUB: no rootfile found")
-                opf_path = rootfile.get('full-path')
-                if not opf_path:
-                    return _err("Invalid EPUB: rootfile has no full-path")
-            except (KeyError, ET.ParseError) as e:
-                return _err(f"Invalid EPUB: could not parse container: {e}")
-            
-            # Parse OPF
-            try:
-                opf_xml = zf.read(opf_path)
-                opf_root = ET.fromstring(opf_xml)
-                ns = {'opf': 'http://www.idpf.org/2007/opf'}
-                
-                manifest = {}
-                for item in opf_root.findall('.//opf:item', ns):
-                    item_id = item.get('id')
-                    href = item.get('href')
-                    manifest[item_id] = href
-                
-                spine_items = []
-                for itemref in opf_root.findall('.//opf:itemref', ns):
-                    item_id = itemref.get('idref')
-                    if item_id in manifest:
-                        spine_items.append(manifest[item_id])
-            except (KeyError, ET.ParseError):
-                return _err("Invalid EPUB: could not parse OPF")
-            
-            if not spine_items:
-                return _err("EPUB has no content")
-            
-            # Build "pages" (spine items)
-            opf_dir = str(Path(opf_path).parent)
-            pages = []
-            chapters = []
-            
-            for i, item_path in enumerate(spine_items):
-                full_path = (Path(opf_dir) / item_path).as_posix()
-                has_text = False
-                char_count = 0
-                title = f"Chapter {i + 1}"
-                
-                try:
-                    content = zf.read(full_path)
-                    soup = BeautifulSoup(content, 'html.parser')
-                    
-                    # Try to extract title
-                    for tag in soup(['h1', 'h2', 'h3']):
-                        if tag.get_text().strip():
-                            title = tag.get_text().strip()
-                            break
-                    
-                    # Count text
-                    text = soup.get_text().strip()
-                    has_text = len(text) > 20
-                    char_count = len(text)
-                except Exception:
-                    pass
-                
-                pages.append({"page": i + 1, "has_text": has_text, "chars": char_count})
-                chapters.append({"title": title, "page": i + 1, "depth": 0})
-            
-            return jsonify({
-                "total_pages": len(spine_items),
-                "pages": pages,
-                "chapters": chapters
-            })
-    
+        entries = _load_epub_entries(file_stream)
+        return jsonify({
+            "total_pages": len(entries),
+            "pages": [{"page": e["page"], "has_text": e["has_text"], "chars": e["chars"]} for e in entries],
+            "chapters": [{"title": e["title"], "page": e["page"], "depth": 0} for e in entries],
+        })
     except Exception as e:
         log.exception("EPUB info extraction failed")
         return _err(f"Failed to read EPUB: {e}")
@@ -2191,63 +2255,76 @@ def _do_synthesis(text: str, backend: str, params: dict, on_progress=None) -> di
     return result
 
 
+def _build_pdf_chapter_texts(file_stream) -> list[tuple[str, str]]:
+    """Return chapter titles and preprocessed text for a PDF."""
+    reader = PdfReader(file_stream)
+    total_pages = len(reader.pages)
+    chapters = _detect_pdf_chapters(reader)
+
+    if not chapters:
+        raise ValueError(
+            "No chapters detected in this PDF. Chapter mode requires detectable chapter boundaries."
+        )
+
+    segments: list[tuple[str, int, int]] = []
+    first_ch_page = chapters[0]["page"]
+    if first_ch_page > 1:
+        segments.append(("Intro", 0, first_ch_page - 2))
+
+    for idx, ch in enumerate(chapters):
+        start = ch["page"] - 1
+        end = chapters[idx + 1]["page"] - 2 if idx < len(chapters) - 1 else total_pages - 1
+        segments.append((ch["title"], start, end))
+
+    header_patterns = _build_pdf_header_patterns(reader)
+    chapter_texts: list[tuple[str, str]] = []
+    for title, start_pg, end_pg in segments:
+        parts = []
+        for pi in range(start_pg, end_pg + 1):
+            page_text = reader.pages[pi].extract_text() or ""
+            parts.append(_strip_page_headers(page_text, header_patterns))
+        chapter_texts.append((title, preprocess_text_for_speech("\n".join(parts))))
+    return chapter_texts
+
+
+def _build_epub_chapter_texts(file_stream) -> list[tuple[str, str]]:
+    """Return chapter titles and preprocessed text for an EPUB."""
+    entries = _load_epub_entries(file_stream)
+    chapter_texts = []
+    for entry in entries:
+        if not entry["text"].strip():
+            continue
+        chapter_texts.append((entry["title"], preprocess_text_for_speech(entry["text"])))
+    return chapter_texts
+
+
 def _convert_chapters(file_stream, source_filename, input_file_name,
                       backend, voice, job_id, save_to_output, t0):
-    """Convert a PDF into one MP3 per chapter, returned as a ZIP."""
+    """Convert a document into one MP3 per chapter, returned as a ZIP."""
     import zipfile as zf
 
     file_ext = Path(source_filename).suffix.lower()
-    if file_ext != ".pdf":
-        return _err("Chapter mode is currently supported for PDF files only.")
-
     _report_progress(job_id, 0, 1, phase="extracting")
 
     try:
-        reader = PdfReader(file_stream)
-        total_pages = len(reader.pages)
-        chapters = _detect_pdf_chapters(reader)
-
-        if not chapters:
-            return _err(
-                "No chapters detected in this PDF. "
-                "Chapter mode requires detectable chapter boundaries."
-            )
-
-        # Build chapter segments: list of (title, start_page_0based, end_page_0based)
-        segments: list[tuple[str, int, int]] = []
-        # Pages before the first chapter → "Intro"
-        first_ch_page = chapters[0]["page"]  # 1-based
-        if first_ch_page > 1:
-            segments.append(("Intro", 0, first_ch_page - 2))
-
-        for idx, ch in enumerate(chapters):
-            start = ch["page"] - 1  # 0-based
-            if idx < len(chapters) - 1:
-                end = chapters[idx + 1]["page"] - 2  # page before next chapter
-            else:
-                end = total_pages - 1
-            segments.append((ch["title"], start, end))
-
-        # Extract all chapter texts upfront (pypdf reads pages lazily,
-        # so we must do this before closing the file stream)
-        header_patterns = _build_pdf_header_patterns(reader)
-        chapter_texts: list[tuple[str, str]] = []  # (title, preprocessed_text)
-        for title, start_pg, end_pg in segments:
-            parts = []
-            for pi in range(start_pg, end_pg + 1):
-                page_text = reader.pages[pi].extract_text() or ""
-                parts.append(_strip_page_headers(page_text, header_patterns))
-            raw = "\n".join(parts)
-            chapter_texts.append((title, preprocess_text_for_speech(raw)))
+        if file_ext == ".pdf":
+            chapter_texts = _build_pdf_chapter_texts(file_stream)
+        elif file_ext == ".epub":
+            chapter_texts = _build_epub_chapter_texts(file_stream)
+        else:
+            return _err(f"Chapter mode does not support '{file_ext}' files.")
     except Exception as e:
-        return _err(f"Failed to read PDF: {e}")
+        return _err(f"Failed to read document: {e}")
     finally:
         if input_file_name:
             file_stream.close()
 
-    log.info("Chapter mode: %d segments detected", len(segments))
-    for i, (title, s, e) in enumerate(segments):
-        log.info("  [%d] p%d-p%d: %s", i, s + 1, e + 1, title)
+    if not chapter_texts:
+        return _err("No chapters detected in this document.")
+
+    log.info("Chapter mode: %d segments detected", len(chapter_texts))
+    for i, (title, text) in enumerate(chapter_texts):
+        log.info("  [%d] %s (%d chars)", i, title, len(text))
 
     # Collect synthesis params (while still in request context)
     try:

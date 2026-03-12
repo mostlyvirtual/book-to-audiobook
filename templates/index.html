@@ -6,43 +6,48 @@
   <title>Audiobook Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' fill='none'%3E%3Cpath d='M10 38V16c0-2 1-3 3-3h5c3 0 4 1 6 3 2-2 3-3 6-3h5c2 0 3 1 3 3v22' stroke='%23e94560' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M24 16v22' stroke='%23e94560' stroke-width='1.5' stroke-linecap='round' opacity='.4'/%3E%3Cpath d='M10 38c2-1 4-2 7-2 4 0 5 1 7 2 2-1 3-2 7-2 3 0 5 1 7 2' stroke='%23e94560' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M9 20a15 15 0 0 1 30 0' stroke='%23ff6b81' stroke-width='3' stroke-linecap='round'/%3E%3Crect x='4' y='20' width='7' height='12' rx='3' fill='%23ff6b81' opacity='.85'/%3E%3Crect x='37' y='20' width='7' height='12' rx='3' fill='%23ff6b81' opacity='.85'/%3E%3C/svg%3E">
   <style>
     /* ============================================================
-       DESIGN SYSTEM — Audiobook Studio
-       Spacing:  4 · 8 · 12 · 16 · 20 · 24 · 32 · 40 · 48 · 64
-       Radii:    6 (sm) · 10 (md) · 14 (lg) · 50% (round)
-       Timing:   0.15s (micro) · 0.25s (std) · 0.35s (emphasis)
+       DESIGN SYSTEM — Audiobook Studio  (Light Theme)
+       Base: 16px · Scale: 4px
+       Radii: 8 (sm) · 12 (md) · 16 (lg) · 50% (round)
+       Timing: 0.15s (micro) · 0.25s (std) · 0.35s (emphasis)
        ============================================================ */
     :root {
-      --bg:           #0c0e1a;
-      --surface:      #141726;
-      --surface2:     #1c2038;
-      --surface3:     #232840;
-      --border:       #252a3a;
-      --border-focus: #454c66;
+      --bg:           #fff8f3;
+      --surface:      #ffffff;
+      --surface2:     #fff1ea;
+      --surface3:     #ffe5da;
+      --border:       #ead8cc;
+      --border-focus: #d7b9a8;
       --accent:       #e94560;
-      --accent-hover: #ff6b81;
-      --accent-glow:  rgba(233,69,96,0.12);
-      --accent-dim:   rgba(233,69,96,0.06);
-      --success:      #34d399;
-      --success-dim:  rgba(52,211,153,0.10);
-      --warning:      #fbbf24;
-      --text:         #e2e4ea;
-      --text-muted:   #7c8298;
-      --text-dim:     #4a4f64;
-      --radius:       10px;
-      --radius-sm:    6px;
-      --radius-lg:    14px;
-      --shadow:       0 2px 16px rgba(0,0,0,.35);
-      --shadow-lg:    0 8px 32px rgba(0,0,0,.45);
+      --accent-hover: #d63b55;
+      --accent-glow:  rgba(233,69,96,0.10);
+      --accent-dim:   rgba(233,69,96,0.05);
+      --accent-soft:  #fff0f2;
+      --success:      #16a34a;
+      --success-bg:   #ecfdf5;
+      --success-dim:  rgba(22,163,74,0.08);
+      --warning:      #d97706;
+      --text:         #2f1d1a;
+      --text-secondary: #6a4a3f;
+      --text-muted:   #936f62;
+      --text-dim:     #bb9f93;
+      --radius:       12px;
+      --radius-sm:    8px;
+      --radius-lg:    16px;
+      --shadow-xs:    0 1px 2px rgba(0,0,0,.04);
+      --shadow:       0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+      --shadow-md:    0 4px 12px rgba(0,0,0,.06), 0 1px 3px rgba(0,0,0,.04);
+      --shadow-lg:    0 8px 24px rgba(0,0,0,.08), 0 2px 8px rgba(0,0,0,.04);
       --sidebar-w:    56px;
       --sidebar-expanded: 180px;
       --font:         'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
       --mono:         'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-      --step-dot:     32px;
-      --content-w:    620px;
+      --step-dot:     34px;
+      --content-w:    640px;
     }
 
     /* === Reset & Base === */
@@ -52,7 +57,10 @@
       font-family: var(--font);
       font-size: 15px;
       line-height: 1.55;
-      background: var(--bg);
+      background:
+        radial-gradient(1200px 500px at 85% -10%, #ffe7df 0%, transparent 60%),
+        radial-gradient(900px 380px at 15% 0%, #fff1e8 0%, transparent 62%),
+        var(--bg);
       color: var(--text);
       min-height: 100vh;
       display: flex;
@@ -64,7 +72,7 @@
     .sidebar {
       width: var(--sidebar-w);
       min-height: 100vh;
-      background: var(--surface);
+      background: linear-gradient(180deg, #fffdfa 0%, #fff6ef 100%);
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
@@ -75,6 +83,7 @@
       z-index: 100;
       transition: width .2s ease;
       overflow: hidden;
+      box-shadow: var(--shadow-xs);
     }
     .sidebar:hover { width: var(--sidebar-expanded); }
     .sidebar .logo {
@@ -116,8 +125,8 @@
       transition: background .15s, color .15s;
       white-space: nowrap;
     }
-    .nav-item:hover { background: rgba(255,255,255,.04); color: var(--text); }
-    .nav-item.active { color: var(--accent); background: var(--accent-dim); }
+    .nav-item:hover { background: var(--surface2); color: var(--text-secondary); }
+    .nav-item.active { color: var(--accent); background: #ffe7ee; }
     .nav-item svg { width: 20px; height: 20px; flex-shrink: 0; }
     .nav-item span { opacity: 0; transition: opacity .15s; }
     .sidebar:hover .nav-item span { opacity: 1; }
@@ -129,22 +138,23 @@
       display: flex;
       justify-content: center;
       align-items: flex-start;
-      padding: 2.5rem 1rem 4rem;
+      padding: 2.5rem 1.5rem 4rem;
       min-height: 100vh;
     }
     .page { display: none; width: 100%; max-width: var(--content-w); }
     .page.active { display: block; }
 
     /* === Page header === */
-    .page-head { margin-bottom: 1.5rem; }
+    .page-head { margin-bottom: 1.75rem; }
     .page-head h1 {
-      font-size: 1.35rem;
+      font-size: 1.5rem;
       font-weight: 700;
-      letter-spacing: -0.01em;
-      margin-bottom: .15rem;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      margin-bottom: .2rem;
     }
     .page-head p {
-      font-size: .85rem;
+      font-size: .9rem;
       color: var(--text-muted);
     }
 
@@ -156,14 +166,14 @@
       font-size: .88rem;
       line-height: 1.4;
     }
-    .flash.error   { background: #2a1020; border-left: 3px solid var(--accent); color: #f0a0a8; }
-    .flash.success { background: #0f2a1e; border-left: 3px solid var(--success); color: #80e8b8; }
-    .flash.info    { background: var(--surface2); border-left: 3px solid #60a5fa; color: #93c5fd; }
+    .flash.error   { background: #fef2f2; border-left: 3px solid var(--accent); color: #991b1b; }
+    .flash.success { background: var(--success-bg); border-left: 3px solid var(--success); color: #166534; }
+    .flash.info    { background: #eff6ff; border-left: 3px solid #3b82f6; color: #1e40af; }
 
     /* === Result card === */
     .result-card {
-      background: #0f2a1e;
-      border: 1px solid rgba(52,211,153,0.25);
+      background: var(--success-bg);
+      border: 1px solid rgba(22,163,74,0.2);
       border-radius: var(--radius);
       padding: 1rem 1.2rem;
       margin-bottom: 1.2rem;
@@ -190,7 +200,7 @@
       gap: .5rem; margin-top: .75rem;
     }
     .stat {
-      background: rgba(0,0,0,.25);
+      background: rgba(0,0,0,.03);
       border-radius: var(--radius-sm);
       padding: .5rem .75rem;
     }
@@ -227,13 +237,13 @@
       background: var(--surface);
       display: flex;
       align-items: center; justify-content: center;
-      font-size: 12px; font-weight: 700;
+      font-size: 13px; font-weight: 700;
       color: var(--text-dim);
       flex-shrink: 0;
       z-index: 1;
       transition: all .25s;
     }
-    .step-dot svg { width: 14px; height: 14px; }
+    .step-dot svg { width: 15px; height: 15px; }
     .step-connector {
       flex: 1;
       width: 2px;
@@ -247,14 +257,15 @@
     .step.expanded .step-dot {
       border-color: var(--accent);
       color: var(--accent);
+      background: var(--accent-soft);
       box-shadow: 0 0 0 4px var(--accent-glow);
     }
     .step.filled .step-dot {
       border-color: var(--success);
       background: var(--success);
-      color: #0c0e1a;
+      color: #fff;
     }
-    .step.filled .step-connector { background: rgba(52,211,153,0.3); }
+    .step.filled .step-connector { background: rgba(22,163,74,0.25); }
 
     /* Right side: content */
     .step-content { flex: 1; min-width: 0; padding-bottom: 8px; }
@@ -267,25 +278,28 @@
       min-height: var(--step-dot);
       padding: 2px 0;
       user-select: none;
+      border-radius: var(--radius-sm);
+      transition: background .15s;
     }
+    .step-header:hover { background: rgba(233,69,96,.06); }
     .step-label {
       font-size: 12px;
       font-weight: 700;
-      letter-spacing: .07em;
+      letter-spacing: .06em;
       text-transform: uppercase;
       color: var(--text-dim);
       transition: color .15s;
       white-space: nowrap;
     }
     .step.expanded .step-label { color: var(--text); }
-    .step.filled .step-label { color: var(--text-muted); }
+    .step.filled .step-label { color: var(--text-secondary); }
 
     .step-hint {
       flex: 1;
       text-align: right;
       font-size: 12px;
       font-family: var(--mono);
-      color: var(--text-dim);
+      color: var(--text-muted);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -323,7 +337,7 @@
       display: block;
       font-size: .8rem;
       font-weight: 600;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       margin-bottom: .3rem;
       margin-top: .9rem;
       letter-spacing: .01em;
@@ -336,7 +350,7 @@
     select {
       width: 100%;
       padding: .55rem .75rem;
-      background: var(--bg);
+      background: var(--surface);
       color: var(--text);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
@@ -354,7 +368,7 @@
     .hint {
       display: block;
       font-size: .72rem;
-      color: var(--text-dim);
+      color: var(--text-muted);
       margin-top: .2rem;
       line-height: 1.4;
     }
@@ -369,11 +383,12 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: .5rem .75rem;
+      background: var(--surface2);
     }
     details summary {
       cursor: pointer;
       font-size: .8rem;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       user-select: none;
       font-weight: 500;
     }
@@ -387,18 +402,18 @@
       text-align: center;
       font-size: .78rem;
       font-weight: 600;
-      background: var(--bg);
-      color: var(--text-dim);
+      background: var(--surface);
+      color: var(--text-muted);
       border: 1px solid var(--border);
       cursor: pointer;
       transition: all .15s;
     }
     .source-tab:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
     .source-tab:last-child  { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
-    .source-tab:hover { color: var(--text-muted); }
+    .source-tab:hover { color: var(--text-secondary); background: var(--surface2); }
     .source-tab.active {
-      background: var(--surface2);
-      color: var(--text);
+      background: var(--accent-soft);
+      color: var(--accent);
       border-color: var(--accent);
     }
 
@@ -411,8 +426,9 @@
       margin-top: .3rem;
       padding: .15rem .5rem;
       border-radius: 10px;
-      background: rgba(0,0,0,.18);
+      background: var(--surface2);
       font-weight: 500;
+      color: var(--text-secondary);
     }
     .status-dot {
       width: 6px; height: 6px;
@@ -421,7 +437,7 @@
     }
     .status-dot.ready   { background: var(--success); }
     .status-dot.pending  { background: var(--warning); }
-    .status-dot.unknown  { background: #555; }
+    .status-dot.unknown  { background: #bbb; }
 
     /* === Language filter pills === */
     .backend-label-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .4rem; }
@@ -430,12 +446,12 @@
     .lang-btn {
       padding: .15rem .5rem; border-radius: 999px;
       border: 1px solid var(--border);
-      background: transparent; color: var(--text-dim);
+      background: transparent; color: var(--text-muted);
       cursor: pointer; font-size: .68rem; font-weight: 600;
       font-family: var(--font);
       transition: all .15s; line-height: 1.2;
     }
-    .lang-btn:hover { border-color: var(--text-dim); color: var(--text-muted); }
+    .lang-btn:hover { border-color: var(--text-muted); color: var(--text-secondary); }
     .lang-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
     /* === Voice section wrapper === */
@@ -450,7 +466,7 @@
       padding: .7rem .85rem;
       margin-top: .6rem;
       font-size: .78rem;
-      color: var(--text-muted);
+      color: var(--text-secondary);
     }
     .page-info.visible { display: block; }
     .page-info.skeleton {
@@ -460,11 +476,11 @@
     .page-info.skeleton::after {
       content: '';
       position: absolute; inset: 0;
-      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.03) 50%, transparent 100%);
+      background: linear-gradient(90deg, transparent 0%, rgba(0,0,0,.02) 50%, transparent 100%);
       animation: shimmer 1.5s infinite;
     }
     .skeleton-lines { display: flex; flex-direction: column; gap: .35rem; }
-    .skeleton-line { height: .6rem; border-radius: 3px; background: var(--border); }
+    .skeleton-line { height: .6rem; border-radius: 3px; background: var(--surface3); }
     .skeleton-line.w60 { width: 60%; }
     .skeleton-line.w40 { width: 40%; }
     .skeleton-line.w80 { width: 80%; }
@@ -487,6 +503,7 @@
       display: flex; justify-content: space-between; align-items: center;
       padding: .22rem 0; font-size: .76rem;
       cursor: pointer; transition: color .15s;
+      color: var(--text-secondary);
     }
     .chapter-item:hover { color: var(--text); }
     .chapter-item .ch-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -501,23 +518,24 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
       padding: 1.4rem 1.5rem 1.5rem;
-      margin-top: 12px;
+      margin-top: 16px;
       position: relative;
       overflow: hidden;
+      box-shadow: var(--shadow);
     }
     .review-card::before {
       content: '';
       position: absolute;
       top: 0; left: 0; right: 0;
       height: 3px;
-      background: linear-gradient(90deg, var(--accent), var(--accent-hover), var(--accent));
+      background: linear-gradient(90deg, var(--accent), #ff9f86, var(--accent));
     }
     .review-title {
       font-size: 12px;
       font-weight: 700;
-      letter-spacing: .07em;
+      letter-spacing: .06em;
       text-transform: uppercase;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       margin-bottom: 1rem;
       display: flex;
       align-items: center;
@@ -533,7 +551,7 @@
       font-size: .82rem;
     }
     .review-key {
-      color: var(--text-dim);
+      color: var(--text-muted);
       font-weight: 500;
       white-space: nowrap;
     }
@@ -558,7 +576,7 @@
       display: flex; align-items: center; gap: .6rem;
       margin-top: .75rem;
     }
-    .toggle-row label { margin: 0; font-weight: 500; font-size: .82rem; }
+    .toggle-row label { margin: 0; font-weight: 500; font-size: .82rem; color: var(--text-secondary); }
     .toggle {
       position: relative;
       width: 38px; height: 20px;
@@ -577,9 +595,10 @@
       position: absolute;
       width: 14px; height: 14px;
       left: 3px; bottom: 3px;
-      background: var(--text);
+      background: #fff;
       border-radius: 50%;
       transition: transform .2s;
+      box-shadow: 0 1px 2px rgba(0,0,0,.1);
     }
     .toggle input:checked + .slider { background: var(--accent); }
     .toggle input:checked + .slider::before { transform: translateX(18px); }
@@ -588,7 +607,7 @@
     .btn-convert {
       margin-top: 1.2rem;
       width: 100%;
-      padding: .7rem;
+      padding: .75rem;
       background: var(--accent);
       color: #fff;
       border: none;
@@ -606,7 +625,7 @@
     }
     .btn-convert:hover {
       background: var(--accent-hover);
-      box-shadow: 0 4px 20px rgba(233,69,96,0.3);
+      box-shadow: 0 4px 16px rgba(233,69,96,0.25);
     }
     .btn-convert:active { transform: scale(.985); }
     .btn-convert svg { width: 18px; height: 18px; }
@@ -615,8 +634,8 @@
     .overlay {
       display: none;
       position: fixed; inset: 0;
-      background: rgba(0,0,0,.65);
-      backdrop-filter: blur(4px);
+      background: rgba(255,255,255,.7);
+      backdrop-filter: blur(6px);
       justify-content: center; align-items: center;
       z-index: 999;
     }
@@ -641,7 +660,7 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .progress-track {
       width: 100%; height: 5px;
-      background: var(--border);
+      background: var(--surface2);
       border-radius: 3px;
       margin: .8rem 0 .5rem;
       overflow: hidden;
@@ -660,6 +679,7 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
       padding: 1.8rem 2rem;
+      box-shadow: var(--shadow);
     }
     .card h1 { font-size: 1.2rem; font-weight: 700; margin-bottom: .15rem; }
     .card .subtitle { font-size: .82rem; color: var(--text-muted); margin-bottom: 1.4rem; }
@@ -677,14 +697,14 @@
       border-color: var(--accent);
       background: var(--accent-dim);
     }
-    .ref-upload-zone svg.ref-mic { width: 44px; height: 44px; opacity: .4; margin-bottom: .2rem; display: block; margin-left: auto; margin-right: auto; }
+    .ref-upload-zone svg.ref-mic { width: 44px; height: 44px; opacity: .3; margin-bottom: .2rem; display: block; margin-left: auto; margin-right: auto; }
     .ref-upload-zone svg.ref-upload-arrow { width: 18px; height: 18px; opacity: .3; margin-bottom: .4rem; }
     .ref-upload-zone p { font-size: .82rem; color: var(--text-muted); margin: .2rem 0 0; }
 
     .ref-list { display: flex; flex-direction: column; gap: .5rem; margin-bottom: 1rem; }
     .ref-item {
       display: flex; align-items: center; gap: .75rem;
-      background: var(--bg); padding: .55rem .75rem; border-radius: var(--radius-sm);
+      background: var(--surface2); padding: .55rem .75rem; border-radius: var(--radius-sm);
       cursor: pointer; border: 2px solid transparent; transition: border-color .15s;
     }
     .ref-item:hover { border-color: var(--border-focus); }
@@ -801,7 +821,7 @@
       </div>
 
       <!-- ======= STEP 2 — Content ======= -->
-      <div class="step expanded" data-step="2" id="step-content">
+      <div class="step collapsed" data-step="2" id="step-content">
         <div class="step-rail">
           <div class="step-dot">2</div>
           <div class="step-connector"></div>
@@ -825,7 +845,7 @@
       </div>
 
       <!-- ======= STEP 3 — Engine & Voice ======= -->
-      <div class="step expanded" data-step="3" id="step-engine">
+      <div class="step collapsed" data-step="3" id="step-engine">
         <div class="step-rail">
           <div class="step-dot">3</div>
           <div class="step-connector"></div>
@@ -833,7 +853,7 @@
         <div class="step-content">
           <div class="step-header" onclick="toggleStep(3)">
             <span class="step-label">Engine &amp; Voice</span>
-            <span class="step-hint" id="sum-engine">Piper</span>
+            <span class="step-hint" id="sum-engine">Kokoro</span>
             <svg class="step-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
           </div>
           <div class="step-panel">
@@ -851,10 +871,10 @@
                   </div>
                   <select id="backend" name="backend">
                     <optgroup label="Local">
-                      <option value="piper" data-langs="en" {% if config.DEFAULT_BACKEND == 'piper' %}selected{% endif %}>Piper</option>
-                      <option value="kokoro" data-langs="en" {% if config.DEFAULT_BACKEND == 'kokoro' %}selected{% endif %}>Kokoro</option>
-                      <option value="supertonic" data-langs="en" {% if config.DEFAULT_BACKEND == 'supertonic' %}selected{% endif %}>Supertonic</option>
-                      <option value="huggingface" data-langs="en,ro" {% if config.DEFAULT_BACKEND == 'huggingface' %}selected{% endif %}>Hugging Face</option>
+                      <option value="kokoro" data-langs="en" selected>Kokoro</option>
+                      <option value="piper" data-langs="en">Piper</option>
+                      <option value="supertonic" data-langs="en">Supertonic</option>
+                      <option value="huggingface" data-langs="en,ro">Hugging Face</option>
                       <option value="speecht5" data-langs="en">SpeechT5 (multi-speaker)</option>
                     </optgroup>
                     <optgroup label="Voice Cloning">
@@ -863,15 +883,34 @@
                     </optgroup>
                     <optgroup label="Cloud">
                       <option value="hf_cloud" data-langs="en,ro">HF Inference API</option>
-                      <option value="polly" data-langs="en" {% if config.DEFAULT_BACKEND == 'polly' %}selected{% endif %}>Amazon Polly</option>
+                      <option value="polly" data-langs="en">Amazon Polly</option>
                     </optgroup>
                   </select>
                   <div class="backend-status" id="backendStatus"><span class="status-dot unknown"></span> <span id="backendStatusText">Checking&hellip;</span></div>
                 </div>
               </div>
 
+              <!-- ===== Kokoro (first — default) ===== -->
+              <div class="voice-section" id="voice-kokoro">
+                <div class="row">
+                  <div>
+                    <label for="voice_kokoro_id">Kokoro Voice</label>
+                    <select id="voice_kokoro_id" name="voice_kokoro_id">
+                      <option value="{{ config.KOKORO_VOICE }}" selected>{{ kokoro_voice_name }}</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="kokoro_speed">Speed</label>
+                    <input type="number" id="kokoro_speed" name="kokoro_speed" value="{{ config.KOKORO_SPEED }}" step="0.1" min="0.5" max="2.0">
+                    <span class="hint">1.0 = normal</span>
+                  </div>
+                </div>
+                <span class="hint" id="kokoro-hint">Requires espeak-ng: <code>brew install espeak-ng</code></span>
+                <input type="hidden" id="kokoro_lang" name="kokoro_lang" value="{{ config.KOKORO_LANG }}">
+              </div>
+
               <!-- ===== Piper ===== -->
-              <div class="voice-section" id="voice-piper">
+              <div class="voice-section" id="voice-piper" style="display:none">
                 <label for="voice_piper">Piper model</label>
                 <select id="voice_piper" name="voice_piper">
                   {% for m in onnx_models %}
@@ -936,25 +975,6 @@
                   <input type="text" id="voice_hf" name="voice_hf" value="{{ config.HF_MODEL }}" placeholder="e.g. facebook/mms-tts-eng">
                   <span class="hint">Override with any HF TTS model ID.</span>
                 </details>
-              </div>
-
-              <!-- ===== Kokoro ===== -->
-              <div class="voice-section" id="voice-kokoro" style="display:none">
-                <div class="row">
-                  <div>
-                    <label for="voice_kokoro_id">Kokoro Voice</label>
-                    <select id="voice_kokoro_id" name="voice_kokoro_id">
-                      <option value="{{ config.KOKORO_VOICE }}" selected>Loading voices...</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label for="kokoro_speed">Speed</label>
-                    <input type="number" id="kokoro_speed" name="kokoro_speed" value="{{ config.KOKORO_SPEED }}" step="0.1" min="0.5" max="2.0">
-                    <span class="hint">1.0 = normal</span>
-                  </div>
-                </div>
-                <span class="hint" id="kokoro-hint">Requires espeak-ng: <code>brew install espeak-ng</code></span>
-                <input type="hidden" id="kokoro_lang" name="kokoro_lang" value="{{ config.KOKORO_LANG }}">
               </div>
 
               <!-- ===== Supertonic ===== -->
@@ -1091,9 +1111,9 @@
         <span class="review-key">Pages</span>
         <span class="review-val" id="rv-pages">all</span>
         <span class="review-key">Engine</span>
-        <span class="review-val" id="rv-engine">Piper</span>
+        <span class="review-val" id="rv-engine">Kokoro</span>
         <span class="review-key">Voice</span>
-        <span class="review-val" id="rv-voice">&mdash;</span>
+        <span class="review-val" id="rv-voice">{{ kokoro_voice_name }}</span>
       </div>
 
       <hr class="review-divider">
@@ -1103,7 +1123,7 @@
           <input type="checkbox" id="chapter_mode" name="chapter_mode" value="1">
           <span class="slider"></span>
         </label>
-        <label for="chapter_mode" style="cursor:pointer">Split by chapter <span id="chapterModeHint" class="hint" style="display:inline;margin:0;font-size:.7rem"></span></label>
+        <label for="chapter_mode" style="cursor:pointer">Split into chapter files <span id="chapterModeHint" class="hint" style="display:inline;margin:0;font-size:.7rem"></span></label>
       </div>
 
       <div class="toggle-row">
@@ -1162,15 +1182,30 @@
 
 <script>
   /* ============================================================
-     STEP WIZARD — Toggle, Fill State, Summaries
+     STEP WIZARD — Exclusive accordion + auto-advance
+     Only one step open at a time. Source opens on load.
+     Selecting a source auto-advances to Pages.
      ============================================================ */
-  const CHECK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><polyline points="3.5 8.5 6.5 11.5 12.5 5"/></svg>';
+  const CHECK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><polyline points="3.5 8.5 6.5 11.5 12.5 5"/></svg>';
+
+  function openStep(n) {
+    // Close all steps, then open the requested one
+    document.querySelectorAll('.step').forEach(s => {
+      s.classList.remove('expanded');
+      s.classList.add('collapsed');
+    });
+    const el = document.querySelector(`.step[data-step="${n}"]`);
+    if (el) {
+      el.classList.remove('collapsed');
+      el.classList.add('expanded');
+    }
+  }
 
   function toggleStep(n) {
     const el = document.querySelector(`.step[data-step="${n}"]`);
     if (!el) return;
-    el.classList.toggle('collapsed');
-    el.classList.toggle('expanded');
+    // Keep exactly one step expanded at a time.
+    openStep(n);
   }
 
   function setStepFilled(n, filled) {
@@ -1183,6 +1218,15 @@
     } else {
       el.classList.remove('filled');
       dot.innerHTML = n;
+    }
+  }
+
+  /** Auto-advance: after source is selected, open Pages step */
+  function advanceFromSource() {
+    const hasFile = (activeSource === 'upload' && bookFileInput.files.length > 0)
+                 || (activeSource === 'input' && inputFileSel.value);
+    if (hasFile) {
+      openStep(2);
     }
   }
 
@@ -1390,15 +1434,16 @@
     const chapterHint = document.getElementById('chapterModeHint');
     if (chapters && chapters.length > 0) {
       chapterRow.style.display = '';
-      chapterHint.textContent = `(${chapters.length} chapters \u2192 ZIP of MP3s)`;
+      chapterHint.textContent = `(${chapters.length} chapter files \u2192 ZIP of MP3s)`;
     } else {
       chapterRow.style.display = 'none';
       document.getElementById('chapter_mode').checked = false;
     }
   }
 
-  bookFileInput.addEventListener('change', () => { fetchPageInfo(); updateStepStates(); });
-  inputFileSel.addEventListener('change', ()  => { fetchPageInfo(); updateStepStates(); });
+  // Source change triggers: fetch page info + advance + update
+  bookFileInput.addEventListener('change', () => { fetchPageInfo(); updateStepStates(); advanceFromSource(); });
+  inputFileSel.addEventListener('change', ()  => { fetchPageInfo(); updateStepStates(); advanceFromSource(); });
   pageRangeInput.addEventListener('input', updateStepStates);
 
   /* ============================================================
@@ -1414,10 +1459,10 @@
      ============================================================ */
   const backendSel = document.getElementById('backend');
   const sections = {
+    kokoro:      document.getElementById('voice-kokoro'),
     piper:       document.getElementById('voice-piper'),
     polly:       document.getElementById('voice-polly'),
     huggingface: document.getElementById('voice-huggingface'),
-    kokoro:      document.getElementById('voice-kokoro'),
     supertonic:  document.getElementById('voice-supertonic'),
     xtts:        document.getElementById('voice-xtts'),
     xtts_ro:     document.getElementById('voice-xtts_ro'),
@@ -1470,8 +1515,20 @@
     updateStepStates();
   }
   backendSel.addEventListener('change', updateVoice);
+
+  // Update review card when voice selection changes within any backend
+  ['voice_kokoro_id', 'voice_polly_id', 'voice_supertonic_id', 'voice_piper',
+   'voice_hf_select', 'voice_hf_cloud_select', 'speecht5_speaker'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', updateReview);
+  });
+  // Text inputs that affect voice review
+  ['voice_hf', 'voice_hf_cloud'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateReview);
+  });
+
   fetchBackendStatus();
-  updateVoice();
 
   /* ============================================================
      DYNAMIC POLLY VOICES
@@ -1544,7 +1601,8 @@
 
   function renderKokoroVoices() {
     if (!kokoroVoicesCache) return;
-    const current = kokoroVoiceSel.value;
+    const defaultVoice = 'am_michael';
+    const currentVoice = kokoroVoiceSel.value || defaultVoice;
     kokoroVoiceSel.innerHTML = '';
     for (const [accent, voices] of Object.entries(kokoroVoicesCache)) {
       const optgroup = document.createElement('optgroup');
@@ -1553,11 +1611,13 @@
         const opt = document.createElement('option');
         opt.value = v.id;
         opt.textContent = v.name;
-        if (v.id === current) opt.selected = true;
         optgroup.appendChild(opt);
       }
       kokoroVoiceSel.appendChild(optgroup);
     }
+    // Set selection after all options are in the DOM
+    kokoroVoiceSel.value = currentVoice;
+    if (!kokoroVoiceSel.value) kokoroVoiceSel.value = defaultVoice;
     updateStepStates();
   }
 
@@ -1871,6 +1931,13 @@
       });
     });
   }
+
+  // Init: source starts expanded and all others collapsed.
+  openStep(1);
+
+  // Enforce Kokoro as the default initial backend.
+  backendSel.value = 'kokoro';
+  updateVoice();
 
   // Init: load references, set initial states
   loadRefVoices();
