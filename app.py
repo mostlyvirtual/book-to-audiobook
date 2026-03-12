@@ -256,11 +256,20 @@ _POLLY_STATUS_TTL_SECONDS = 60
 def _validate_piper_model_files(model_path: str) -> str:
     """Validate Piper model + sidecar config JSON and return config path.
 
+    Auto-downloads from HuggingFace if the model stem is in PIPER_VOICES.
     Raises ValueError with actionable message when files are missing/corrupt.
     """
     model = Path(model_path)
     if not model.is_file():
-        raise ValueError(f"Piper model not found: {model}")
+        try:
+            _download_piper_model(model_path)
+        except Exception as e:
+            log.warning("Auto-download of Piper model failed: %s", e)
+        if not model.is_file():
+            raise ValueError(
+                f"Piper model not found: {model}. "
+                "Place a .onnx model in the models/ folder or select a different voice."
+            )
 
     config_path = Path(f"{model_path}.json")
     if not config_path.is_file():
@@ -1846,14 +1855,28 @@ def serve_reference_audio(filename):
 @app.route("/")
 def index():
     project_dir = Path(__file__).parent
-    # Discover .onnx models in models/ subfolder
     models_dir = project_dir / "models"
-    onnx_models: list[str] = []
-    if models_dir.is_dir():
-        for p in sorted(models_dir.glob("*.onnx")):
+    models_dir.mkdir(exist_ok=True)
+
+    # Build a merged voice list: catalogue voices, flagging which are already local.
+    local_stems = {
+        p.stem for p in models_dir.glob("*.onnx")
+        if (models_dir / f"{p.stem}.onnx.json").exists()
+    }
+    onnx_models: list[dict] = []
+    for stem, info in PIPER_VOICES.items():
+        full_path = str(models_dir / f"{stem}.onnx")
+        onnx_models.append({
+            "path":      full_path,
+            "name":      info["name"],
+            "downloaded": stem in local_stems,
+        })
+    # Also include any locally present models NOT in the catalogue.
+    for p in sorted(models_dir.glob("*.onnx")):
+        if p.stem not in PIPER_VOICES:
             try:
                 _validate_piper_model_files(str(p))
-                onnx_models.append(str(p))
+                onnx_models.append({"path": str(p), "name": p.stem, "downloaded": True})
             except ValueError as e:
                 log.warning("Skipping invalid Piper model in UI list: %s", e)
     # Discover books (PDFs and EPUBs) in input/ folder
@@ -2095,29 +2118,18 @@ SUPERTONIC_VOICES: dict[str, list[dict]] = {
 KOKORO_VOICES: dict[str, list[dict]] = {
     "American Female": [
         {"id": "af_bella",   "name": "Bella"},
-        {"id": "af_emma",    "name": "Emma"},
-        {"id": "af_liam",    "name": "Liam"},
-        {"id": "af_alice",   "name": "Alice"},
-        {"id": "af_lily",    "name": "Lily"},
         {"id": "af_sarah",   "name": "Sarah"},
-        {"id": "af_maya",    "name": "Maya"},
     ],
     "American Male": [
         {"id": "am_adam",    "name": "Adam"},
         {"id": "am_michael", "name": "Michael"},
-        {"id": "am_brian",   "name": "Brian"},
-        {"id": "am_jack",    "name": "Jack"},
-        {"id": "am_david",   "name": "David"},
     ],
     "British Female": [
         {"id": "bf_emma",    "name": "Emma"},
         {"id": "bf_lily",    "name": "Lily"},
         {"id": "bf_alice",   "name": "Alice"},
-        {"id": "bf_rose",    "name": "Rose"},
     ],
     "British Male": [
-        {"id": "bm_james",   "name": "James"},
-        {"id": "bm_oliver",  "name": "Oliver"},
         {"id": "bm_george",  "name": "George"},
     ],
 }
