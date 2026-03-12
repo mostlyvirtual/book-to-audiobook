@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDF → Audiobook</title>
+  <style>
+    :root {
+      --bg: #1a1a2e;
+      --surface: #16213e;
+      --surface2: #0f3460;
+      --accent: #e94560;
+      --accent-hover: #ff6b81;
+      --text: #eee;
+      --text-muted: #aab;
+      --radius: 8px;
+      --shadow: 0 2px 12px rgba(0,0,0,.4);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 3rem 1rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      width: 100%;
+      max-width: 540px;
+      padding: 2rem 2.2rem;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: .3rem;
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: .9rem;
+      margin-bottom: 1.8rem;
+    }
+
+    /* Flash messages */
+    .flash {
+      padding: .7rem 1rem;
+      border-radius: var(--radius);
+      margin-bottom: 1.2rem;
+      font-size: .9rem;
+    }
+    .flash.error   { background: #5c1a2a; border-left: 4px solid var(--accent); }
+    .flash.success { background: #1a3c2a; border-left: 4px solid #2ecc71; }
+
+    /* Result card (shown after successful conversion) */
+    .result-card {
+      background: #1a3c2a;
+      border: 1px solid #2ecc71;
+      border-radius: var(--radius);
+      padding: 1rem 1.2rem;
+      margin-bottom: 1.2rem;
+      animation: fadeSlideIn .25s ease;
+    }
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .result-header {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      font-weight: 600;
+      color: #2ecc71;
+      margin-bottom: .55rem;
+    }
+    .result-icon { font-size: 1.1rem; }
+    .result-filename {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: .75rem;
+      color: var(--text-muted);
+      word-break: break-all;
+      line-height: 1.4;
+      margin-bottom: .1rem;
+    }
+    .result-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: .5rem;
+      margin-top: .75rem;
+    }
+    .stat {
+      background: rgba(0,0,0,.25);
+      border-radius: calc(var(--radius) - 2px);
+      padding: .5rem .75rem;
+    }
+    .stat-label {
+      display: block;
+      font-size: .67rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: .25rem;
+    }
+    .stat-value {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    /* Form elements */
+    label {
+      display: block;
+      font-size: .85rem;
+      color: var(--text-muted);
+      margin-bottom: .3rem;
+      margin-top: 1rem;
+    }
+
+    label:first-of-type { margin-top: 0; }
+
+    input[type="file"],
+    input[type="text"],
+    input[type="number"],
+    select {
+      width: 100%;
+      padding: .6rem .8rem;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid #334;
+      border-radius: var(--radius);
+      font-size: .95rem;
+      outline: none;
+      transition: border-color .2s;
+    }
+
+    input:focus, select:focus {
+      border-color: var(--accent);
+    }
+
+    input[type="file"] {
+      padding: .45rem .6rem;
+      cursor: pointer;
+    }
+
+    .row {
+      display: flex;
+      gap: .8rem;
+    }
+    .row > * { flex: 1; }
+
+    /* Voice section — changes dynamically */
+    .voice-section { margin-top: 1rem; }
+
+    details {
+      margin-top: .8rem;
+      border: 1px solid #334;
+      border-radius: var(--radius);
+      padding: .5rem .8rem;
+    }
+    details summary {
+      cursor: pointer;
+      font-size: .85rem;
+      color: var(--text-muted);
+      user-select: none;
+    }
+    details[open] summary { margin-bottom: .5rem; }
+
+    .row-3 { display: flex; gap: .6rem; }
+    .row-3 > * { flex: 1; min-width: 0; }
+
+    /* Toggle switch for save-to-output */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      margin-top: 1rem;
+    }
+    .toggle-row label { margin: 0; }
+    .toggle {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      flex-shrink: 0;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle .slider {
+      position: absolute; inset: 0;
+      background: #334;
+      border-radius: 11px;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .toggle .slider::before {
+      content: '';
+      position: absolute;
+      width: 16px; height: 16px;
+      left: 3px; bottom: 3px;
+      background: var(--text);
+      border-radius: 50%;
+      transition: transform .2s;
+    }
+    .toggle input:checked + .slider { background: var(--accent); }
+    .toggle input:checked + .slider::before { transform: translateX(18px); }
+
+    /* Page info card */
+    .page-info {
+      display: none;
+      background: var(--bg);
+      border: 1px solid #334;
+      border-radius: var(--radius);
+      padding: .7rem .9rem;
+      margin-top: .6rem;
+      font-size: .8rem;
+      color: var(--text-muted);
+    }
+    .page-info.visible { display: block; }
+    .page-info.skeleton {
+      display: block;
+      min-height: 52px;
+      position: relative;
+      overflow: hidden;
+    }
+    .page-info.skeleton::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.04) 50%, transparent 100%);
+      animation: shimmer 1.5s infinite;
+    }
+    .skeleton-lines { display: flex; flex-direction: column; gap: .4rem; }
+    .skeleton-line {
+      height: .65rem;
+      border-radius: 3px;
+      background: #334;
+    }
+    .skeleton-line.w60 { width: 60%; }
+    .skeleton-line.w40 { width: 40%; }
+    .skeleton-line.w80 { width: 80%; }
+    @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+    .page-info .stats {
+      display: flex;
+      gap: .8rem;
+      flex-wrap: wrap;
+      margin-bottom: .4rem;
+    }
+    .page-info .stat { white-space: nowrap; }
+    .page-info .text-pages { color: #2ecc71; }
+    .page-info .blank-pages { color: var(--accent); }
+    .page-info .suggest-range {
+      color: var(--accent);
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    .chapter-list {
+      margin-top: .5rem;
+      padding-top: .5rem;
+      border-top: 1px solid #334;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .chapter-list::-webkit-scrollbar { width: 4px; }
+    .chapter-list::-webkit-scrollbar-thumb { background: #334; border-radius: 2px; }
+    .chapter-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: .25rem 0;
+      font-size: .78rem;
+      cursor: pointer;
+      transition: color .15s;
+    }
+    .chapter-item:hover { color: var(--text); }
+    .chapter-item .ch-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chapter-item .ch-page {
+      flex-shrink: 0;
+      margin-left: .6rem;
+      color: var(--accent);
+      font-variant-numeric: tabular-nums;
+    }
+    .chapter-item.depth-1 { padding-left: 1rem; font-size: .74rem; }
+
+    /* PDF source tabs */
+    .source-tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: .6rem;
+    }
+    .source-tab {
+      flex: 1;
+      padding: .45rem .5rem;
+      text-align: center;
+      font-size: .8rem;
+      background: var(--bg);
+      color: var(--text-muted);
+      border: 1px solid #334;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .source-tab:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+    .source-tab:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+    .source-tab.active {
+      background: var(--surface2);
+      color: var(--text);
+      border-color: var(--accent);
+    }
+
+    button {
+      margin-top: 1.6rem;
+      width: 100%;
+      padding: .75rem;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    button:hover { background: var(--accent-hover); }
+
+    .hint {
+      display: block;
+      font-size: .75rem;
+      color: var(--text-muted);
+      margin-top: .2rem;
+    }
+
+    /* Spinner overlay */
+    .overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.6);
+      justify-content: center;
+      align-items: center;
+      z-index: 999;
+    }
+    .overlay.active { display: flex; }
+    .spinner-box {
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 2rem 2.5rem;
+      text-align: center;
+      box-shadow: var(--shadow);
+    }
+    .spinner {
+      width: 40px; height: 40px;
+      margin: 0 auto 1rem;
+      border: 4px solid #334;
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h1>PDF → Audiobook</h1>
+  <p class="subtitle">Upload a PDF, pick pages and a voice, get an MP3.</p>
+
+  <!-- Flash messages (server-side, for direct navigation) -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}
+      <div class="flash {{ cat }}">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  <!-- Inline status area (JS-driven, errors only) -->
+  <div id="status" class="flash error" style="display:none"></div>
+
+  <!-- Result card (shown on successful conversion) -->
+  <div id="result-card" class="result-card" style="display:none">
+    <div class="result-header">
+      <span class="result-icon">&#10003;</span>
+      <span id="result-title">Conversion complete</span>
+    </div>
+    <div class="result-filename" id="result-filename"></div>
+    <div class="result-stats" id="result-stats" style="display:none">
+      <div class="stat">
+        <span class="stat-label">Characters billed</span>
+        <span class="stat-value" id="stat-chars">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Estimated cost</span>
+        <span class="stat-value" id="stat-cost">—</span>
+      </div>
+    </div>
+  </div>
+
+  <form method="post" action="/convert" enctype="multipart/form-data" id="convertForm">
+
+    <label>PDF source</label>
+    <div class="source-tabs">
+      <div class="source-tab active" data-source="upload">Upload file</div>
+      <div class="source-tab" data-source="input">Input folder{% if input_pdfs %} ({{ input_pdfs|length }}){% endif %}</div>
+    </div>
+
+    <div id="source-upload">
+      <input type="file" id="pdf" name="pdf" accept=".pdf">
+    </div>
+
+    <div id="source-input" style="display:none">
+      <select id="input_file" name="input_file">
+        <option value="">— select a file from input/ —</option>
+        {% for f in input_pdfs %}
+          <option value="{{ f }}">{{ f }}</option>
+        {% endfor %}
+      </select>
+      <span class="hint" style="margin-bottom:.6rem">Place PDFs in the <code>input/</code> folder and they appear here.</span>
+    </div>
+    <input type="hidden" id="pdf_source" name="pdf_source" value="upload">
+
+    <div class="row">
+      <div>
+        <label for="page_range">Pages</label>
+        <input type="text" id="page_range" name="page_range" value="all" placeholder='e.g. "all", "1-10", "5"'>
+      </div>
+      <div>
+        <label for="backend">TTS backend</label>
+        <select id="backend" name="backend">
+          <option value="piper" {% if config.DEFAULT_BACKEND == 'piper' %}selected{% endif %}>Piper (local)</option>
+          <option value="polly" {% if config.DEFAULT_BACKEND == 'polly' %}selected{% endif %}>Amazon Polly</option>
+          <option value="huggingface" {% if config.DEFAULT_BACKEND == 'huggingface' %}selected{% endif %}>Hugging Face</option>
+        </select>
+      </div>
+    </div>
+    <div class="page-info" id="pageInfo"></div>
+
+    <!-- ===== Piper voice + prosody ===== -->
+    <div class="voice-section" id="voice-piper">
+      <label for="voice_piper">Piper model</label>
+      <select id="voice_piper" name="voice_piper">
+        {% for m in onnx_models %}
+          <option value="{{ m }}" {% if m == config.PIPER_MODEL %}selected{% endif %}>{{ m.split('/')[-1] }}</option>
+        {% endfor %}
+      </select>
+      <span class="hint">ONNX voice models found in the project folder.</span>
+
+      <details>
+        <summary>Prosody settings</summary>
+        <div class="row-3">
+          <div>
+            <label for="length_scale">Speed</label>
+            <input type="number" id="length_scale" name="length_scale"
+                   value="{{ config.PIPER_LENGTH_SCALE }}" step="0.05" min="0.5" max="3.0">
+            <span class="hint">&lt;1 faster, &gt;1 slower</span>
+          </div>
+          <div>
+            <label for="sentence_silence">Pause (s)</label>
+            <input type="number" id="sentence_silence" name="sentence_silence"
+                   value="{{ config.PIPER_SENTENCE_SILENCE }}" step="0.1" min="0" max="3.0">
+            <span class="hint">Between sentences</span>
+          </div>
+          <div>
+            <label for="noise_scale">Variation</label>
+            <input type="number" id="noise_scale" name="noise_scale"
+                   value="{{ config.PIPER_NOISE_SCALE }}" step="0.05" min="0" max="1.0">
+            <span class="hint">Naturalness</span>
+          </div>
+        </div>
+        <input type="hidden" id="noise_w_scale" name="noise_w_scale"
+               value="{{ config.PIPER_NOISE_W_SCALE }}">
+      </details>
+    </div>
+
+    <!-- ===== Polly voice ===== -->
+    <div class="voice-section" id="voice-polly" style="display:none">
+      <div class="row">
+        <div>
+          <label for="voice_polly_id">Polly Voice</label>
+          <select id="voice_polly_id" name="voice_polly_id">
+            <option value="{{ config.POLLY_VOICE_ID }}">{{ config.POLLY_VOICE_ID }} (loading…)</option>
+          </select>
+        </div>
+        <div>
+          <label for="engine">Engine</label>
+          <select id="engine" name="engine">
+            <option value="neural">Neural</option>
+            <option value="standard">Standard</option>
+            <option value="generative">Generative</option>
+            <option value="long-form">Long-form</option>
+          </select>
+        </div>
+      </div>
+      <span class="hint" id="polly-hint">Select Polly backend to load available voices from AWS.</span>
+    </div>
+
+    <!-- ===== HuggingFace voice ===== -->
+    <div class="voice-section" id="voice-huggingface" style="display:none">
+      <label for="voice_hf">HF model name</label>
+      <input type="text" id="voice_hf" name="voice_hf" value="{{ config.HF_MODEL }}" placeholder="e.g. facebook/mms-tts-eng">
+    </div>
+
+    <div class="toggle-row">
+      <label class="toggle">
+        <input type="checkbox" id="save_to_output" name="save_to_output" value="1">
+        <span class="slider"></span>
+      </label>
+      <label for="save_to_output" style="margin:0;cursor:pointer">Save to <code>output/</code> folder instead of downloading</label>
+    </div>
+
+    <button type="submit">Convert to MP3</button>
+  </form>
+</div>
+
+<!-- Processing overlay -->
+<div class="overlay" id="overlay">
+  <div class="spinner-box">
+    <div class="spinner"></div>
+    <p>Converting… this may take a while.</p>
+  </div>
+</div>
+
+<script>
+  // ---- PDF Source tabs ----
+  const sourceTabs = document.querySelectorAll('.source-tab');
+  const sourceUpload = document.getElementById('source-upload');
+  const sourceInput  = document.getElementById('source-input');
+  const pdfSourceField = document.getElementById('pdf_source');
+  const pdfFileInput = document.getElementById('pdf');
+  const inputFileSel = document.getElementById('input_file');
+  let activeSource = 'upload';
+
+  sourceTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      sourceTabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      activeSource = tab.dataset.source;
+      pdfSourceField.value = activeSource;
+      sourceUpload.style.display = activeSource === 'upload' ? '' : 'none';
+      sourceInput.style.display  = activeSource === 'input'  ? '' : 'none';
+      // Trigger page info when switching to input file
+      if (activeSource === 'input' && inputFileSel.value) fetchPageInfo();
+    });
+  });
+
+  // ---- Smart page info ----
+  const pageInfoDiv = document.getElementById('pageInfo');
+  const pageRangeInput = document.getElementById('page_range');
+  let cachedPageData = null;
+
+  function showSkeleton() {
+    pageInfoDiv.innerHTML = '<div class="skeleton-lines"><div class="skeleton-line w60"></div><div class="skeleton-line w40"></div><div class="skeleton-line w80"></div></div>';
+    pageInfoDiv.className = 'page-info skeleton';
+  }
+
+  async function fetchPageInfo() {
+    const fd = new FormData();
+    if (activeSource === 'input' && inputFileSel.value) {
+      fd.set('input_file', inputFileSel.value);
+    } else if (activeSource === 'upload' && pdfFileInput.files.length) {
+      fd.set('pdf', pdfFileInput.files[0]);
+    } else {
+      pageInfoDiv.className = 'page-info';
+      cachedPageData = null;
+      return;
+    }
+    showSkeleton();
+    try {
+      const resp = await fetch('/api/pdf-info', { method: 'POST', body: fd });
+      const data = await resp.json();
+      if (data.error) { pageInfoDiv.textContent = data.error; pageInfoDiv.className = 'page-info visible'; cachedPageData = null; return; }
+      cachedPageData = data;
+      renderPageInfo();
+    } catch (e) {
+      pageInfoDiv.className = 'page-info';
+      cachedPageData = null;
+    }
+  }
+
+  function renderPageInfo() {
+    if (!cachedPageData) { pageInfoDiv.className = 'page-info'; return; }
+    const { total_pages, pages, chapters } = cachedPageData;
+    const textPages = pages.filter(p => p.has_text).length;
+    const blankPages = total_pages - textPages;
+
+    const firstText = pages.find(p => p.has_text);
+    const lastText  = [...pages].reverse().find(p => p.has_text);
+    let suggestion = '';
+    if (firstText && lastText && (firstText.page > 1 || lastText.page < total_pages)) {
+      suggestion = `<span class="stat">Suggested: <a href="#" class="suggest-range" data-range="${firstText.page}-${lastText.page}">${firstText.page}–${lastText.page}</a></span>`;
+    }
+
+    let html = `<div class="stats">`;
+    html += `<span class="stat">${total_pages} pages</span>`;
+    html += `<span class="stat text-pages">${textPages} with text</span>`;
+    if (blankPages > 0) html += `<span class="stat blank-pages">${blankPages} blank</span>`;
+    html += suggestion;
+    html += `</div>`;
+
+    if (chapters && chapters.length > 0) {
+      html += `<div class="chapter-list">`;
+      for (const ch of chapters) {
+        const depthClass = ch.depth > 0 ? ' depth-1' : '';
+        // Determine end page: next chapter's page - 1, or last text page
+        const idx = chapters.indexOf(ch);
+        const endPage = idx < chapters.length - 1 ? chapters[idx + 1].page - 1 : (lastText ? lastText.page : total_pages);
+        const range = ch.page === endPage ? `${ch.page}` : `${ch.page}-${endPage}`;
+        html += `<div class="chapter-item${depthClass}" data-range="${range}"><span class="ch-title">${ch.title}</span><span class="ch-page">p${ch.page}</span></div>`;
+      }
+      html += `</div>`;
+    }
+
+    pageInfoDiv.innerHTML = html;
+    pageInfoDiv.className = 'page-info visible';
+
+    // Bind suggestion link
+    const link = pageInfoDiv.querySelector('.suggest-range');
+    if (link) {
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        pageRangeInput.value = link.dataset.range;
+      });
+    }
+    // Bind chapter clicks
+    pageInfoDiv.querySelectorAll('.chapter-item').forEach(el => {
+      el.addEventListener('click', () => {
+        pageRangeInput.value = el.dataset.range;
+      });
+    });
+  }
+
+  pdfFileInput.addEventListener('change', fetchPageInfo);
+  inputFileSel.addEventListener('change', fetchPageInfo);
+
+  // ---- Backend voice switching ----
+  const backendSel  = document.getElementById('backend');
+  const sections    = {
+    piper:       document.getElementById('voice-piper'),
+    polly:       document.getElementById('voice-polly'),
+    huggingface: document.getElementById('voice-huggingface'),
+  };
+
+  function updateVoice() {
+    Object.entries(sections).forEach(([key, section]) => {
+      const isActive = key === backendSel.value;
+      section.style.display = isActive ? '' : 'none';
+      section.querySelectorAll('input, select, textarea, button').forEach(el => {
+        el.disabled = !isActive;
+      });
+    });
+    const active = sections[backendSel.value];
+    if (active) active.style.display = '';
+    if (backendSel.value === 'polly') fetchPollyVoices();
+  }
+  backendSel.addEventListener('change', updateVoice);
+  updateVoice();
+
+  // ---- Dynamic Polly voices ----
+  const pollyVoiceSel = document.getElementById('voice_polly_id');
+  const pollyEngineSel = document.getElementById('engine');
+  const pollyHint = document.getElementById('polly-hint');
+  let pollyVoicesCache = null;
+
+  async function fetchPollyVoices() {
+    if (pollyVoicesCache) { renderPollyVoices(); return; }
+    pollyHint.textContent = 'Loading voices from AWS…';
+    try {
+      const resp = await fetch('/api/polly-voices');
+      const data = await resp.json();
+      if (data.error) {
+        pollyHint.textContent = 'Could not load voices: ' + data.error;
+        return;
+      }
+      pollyVoicesCache = data.voices;
+      renderPollyVoices();
+      pollyHint.textContent = `${pollyVoicesCache.length} voices available · SSML pauses added automatically.`;
+    } catch (e) {
+      pollyHint.textContent = 'Failed to connect to AWS.';
+    }
+  }
+
+  function renderPollyVoices() {
+    if (!pollyVoicesCache) return;
+    const engine = pollyEngineSel.value;
+    const filtered = pollyVoicesCache.filter(v => v.engines.includes(engine));
+    const current = pollyVoiceSel.value;
+    pollyVoiceSel.innerHTML = '';
+    // Group by language
+    const byLang = {};
+    for (const v of filtered) {
+      const key = v.language;
+      if (!byLang[key]) byLang[key] = [];
+      byLang[key].push(v);
+    }
+    for (const [lang, voices] of Object.entries(byLang).sort((a, b) => a[0].localeCompare(b[0]))) {
+      const optgroup = document.createElement('optgroup');
+      optgroup.label = lang;
+      for (const v of voices) {
+        const opt = document.createElement('option');
+        opt.value = v.id;
+        opt.textContent = `${v.name} (${v.gender})`;
+        if (v.id === current || v.id === '{{ config.POLLY_VOICE_ID }}') opt.selected = true;
+        optgroup.appendChild(opt);
+      }
+      pollyVoiceSel.appendChild(optgroup);
+    }
+    if (!filtered.length) {
+      pollyVoiceSel.innerHTML = '<option value="">No voices for this engine</option>';
+    }
+  }
+  pollyEngineSel.addEventListener('change', renderPollyVoices);
+
+  const overlay   = document.getElementById('overlay');
+  const statusDiv  = document.getElementById('status');
+  const form       = document.getElementById('convertForm');
+
+  const resultCard    = document.getElementById('result-card');
+  const resultTitle   = document.getElementById('result-title');
+  const resultFname   = document.getElementById('result-filename');
+  const resultStats   = document.getElementById('result-stats');
+  const statChars     = document.getElementById('stat-chars');
+  const statCost      = document.getElementById('stat-cost');
+
+  function showStatus(msg, type) {
+    // Only used for errors now; success uses showResult()
+    resultCard.style.display = 'none';
+    statusDiv.textContent = msg;
+    statusDiv.className = 'flash ' + type;
+    statusDiv.style.display = '';
+  }
+  function hideStatus() {
+    statusDiv.style.display = 'none';
+    resultCard.style.display = 'none';
+  }
+
+  function showResult({ title, filename, chars, costUsd }) {
+    statusDiv.style.display = 'none';
+    resultTitle.textContent = title;
+    resultFname.textContent = filename;
+    if (chars != null) {
+      statChars.textContent = chars.toLocaleString();
+      statCost.textContent = `$${costUsd.toFixed(4)}`;
+      resultStats.style.display = '';
+    } else {
+      resultStats.style.display = 'none';
+    }
+    // Force re-trigger animation on repeated conversions
+    resultCard.style.display = 'none';
+    void resultCard.offsetWidth;
+    resultCard.style.display = '';
+  }
+
+  // Submit via fetch so we can control download + overlay lifecycle
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    hideStatus();
+
+    // Client-side checks
+    if (activeSource === 'upload') {
+      if (!pdfFileInput.files.length) {
+        showStatus('Please select a PDF file.', 'error');
+        return;
+      }
+      const file = pdfFileInput.files[0];
+      if (!file.name.toLowerCase().endsWith('.pdf')) {
+        showStatus('Please select a .pdf file.', 'error');
+        return;
+      }
+    } else {
+      if (!inputFileSel.value) {
+        showStatus('Please select a file from the input folder.', 'error');
+        return;
+      }
+    }
+    const pageRange = document.getElementById('page_range').value.trim();
+    if (!pageRange) {
+      showStatus('Please enter a page range.', 'error');
+      return;
+    }
+
+    // Map the active voice input into the form data
+    const backend = backendSel.value;
+    const fd = new FormData(form);
+
+    // Remove the file input if using input/ source to avoid sending a large empty part
+    if (activeSource === 'input') {
+      fd.delete('pdf');
+    } else {
+      fd.delete('input_file');
+    }
+
+    let voiceVal = '';
+    if (backend === 'piper')       voiceVal = document.getElementById('voice_piper').value;
+    if (backend === 'polly')       voiceVal = document.getElementById('voice_polly_id').value;
+    if (backend === 'huggingface') voiceVal = document.getElementById('voice_hf').value;
+    fd.set('voice', voiceVal);
+
+    overlay.classList.add('active');
+
+    try {
+      const resp = await fetch('/convert', { method: 'POST', body: fd });
+
+      if (!resp.ok) {
+        let msg = 'Conversion failed.';
+        try {
+          const json = await resp.json();
+          if (json.error) msg = json.error;
+        } catch (_) {}
+        showStatus(msg, 'error');
+        return;
+      }
+
+      // Check if server returned a JSON "saved" response
+      const ct = resp.headers.get('Content-Type') || '';
+      if (ct.includes('application/json')) {
+        const json = await resp.json();
+        if (json.saved) {
+          showResult({
+            title:    'Saved to output/',
+            filename: json.filename,
+            chars:    json.polly_chars_billed ?? null,
+            costUsd:  json.polly_cost_usd    ?? null,
+          });
+          return;
+        }
+      }
+
+      // Otherwise — trigger a real download from the blob
+      const blob = await resp.blob();
+      const cd   = resp.headers.get('Content-Disposition') || '';
+      const match = cd.match(/filename="?([^"]+)"?/);
+      const fname = match ? match[1] : 'audiobook.mp3';
+
+      const url = URL.createObjectURL(blob);
+      const a   = document.createElement('a');
+      a.href = url;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      showResult({ title: 'Your MP3 is downloading', filename: fname, chars: null, costUsd: null });
+
+    } catch (err) {
+      showStatus('Network error: ' + err.message, 'error');
+    } finally {
+      overlay.classList.remove('active');
+    }
+  });
+</script>
+
+</body>
+</html>

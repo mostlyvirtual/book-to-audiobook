@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.mypy_cache/
+*.wav
+*.mp3
+.env
+
+# Model files (large binaries)
+models/*.onnx
+models/*.onnx.json
+
+# Input/output folders — keep the dirs, ignore contents
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
