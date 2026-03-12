@@ -1938,6 +1938,10 @@
           progressFill.style.width = '95%';
           progressPhase.textContent = 'Encoding MP3\u2026';
           progressLabel.textContent = '';
+        } else if (p.phase === 'downloading') {
+          progressFill.style.width = '10%';
+          progressPhase.textContent = 'Downloading model\u2026';
+          progressLabel.textContent = 'First-run download \u2014 this only happens once';
         }
       } catch (_) {}
       if (pollActive) setTimeout(poll, 500);

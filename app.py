@@ -107,6 +107,7 @@ log = logging.getLogger(__name__)
 
 _jobs: dict[str, dict] = {}  # job_id -> progress + control state
 _jobs_lock = threading.Lock()
+_job_context = threading.local()  # per-request job_id for lazy loaders
 
 
 class JobCancelledError(Exception):
@@ -125,6 +126,13 @@ def _make_on_progress(job_id: str | None, phase: str = "synthesizing"):
         _wait_if_paused(job_id)
         _report_progress(job_id, current, total, phase=phase)
     return _cb
+
+
+def _report_downloading(label: str) -> None:
+    """Used by lazy loaders to signal a first-run model download to the frontend."""
+    job_id = getattr(_job_context, 'job_id', None)
+    _report_progress(job_id, 0, 0, phase="downloading")
+    log.info("Downloading model: %s (this only happens once)", label)
 
 
 def _report_progress(job_id: str | None, current: int, total: int, phase: str = "synth"):
@@ -258,6 +266,7 @@ def _get_hf_pipeline(model_name: str):
     if model_name not in _hf_pipelines:
         from transformers import pipeline as hf_pipeline
 
+        _report_downloading(f"HuggingFace TTS: {model_name}")
         log.info("Loading HF TTS model: %s", model_name)
         _hf_pipelines[model_name] = hf_pipeline("text-to-speech", model=model_name)
     return _hf_pipelines[model_name]
@@ -275,6 +284,7 @@ def _get_kokoro_pipeline(lang_code: str):
     if lang_code not in _kokoro_pipelines:
         try:
             from kokoro import KPipeline
+            _report_downloading(f"Kokoro (lang={lang_code})")
             log.info("Loading Kokoro TTS pipeline for lang=%s", lang_code)
             _kokoro_pipelines[lang_code] = KPipeline(lang_code=lang_code)
         except ImportError:
@@ -292,6 +302,7 @@ def _get_supertonic_tts():
     if _supertonic_tts is None:
         try:
             from supertonic import TTS
+            _report_downloading("Supertonic (~305 MB)")
             log.info("Loading Supertonic TTS (may download ~305MB model on first run)")
             _supertonic_tts = TTS(auto_download=True)
         except ImportError:
@@ -1421,9 +1432,11 @@ def _get_xtts_model(model_key: str = "base"):
         try:
             from TTS.api import TTS as CoquiTTS
             if model_key == "base":
+                _report_downloading("XTTS-v2 base (~1.8 GB)")
                 log.info("Loading XTTS-v2 base model (~1.8GB on first run)")
                 _xtts_models[model_key] = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2")
             else:
+                _report_downloading(f"XTTS model: {model_key}")
                 log.info("Loading XTTS model: %s", model_key)
                 _xtts_models[model_key] = CoquiTTS(model_key)
         except ImportError:
@@ -1442,6 +1455,7 @@ def _get_xtts_ro_model():
             from TTS.tts.models.xtts import Xtts
             from huggingface_hub import snapshot_download
 
+            _report_downloading("XTTS-v2 Romanian fine-tune (~1.8 GB)")
             log.info("Loading XTTS-v2 Romanian fine-tune (~1.8GB on first run)")
             model_dir = snapshot_download("eduardem/xtts-v2-romanian")
             config = XttsConfig()
@@ -1606,6 +1620,7 @@ def _get_speecht5():
         from datasets import load_dataset
         import torch
 
+        _report_downloading("SpeechT5 (microsoft/speecht5_tts)")
         log.info("Loading SpeechT5 model + vocoder + speaker embeddings")
         processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
         model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
@@ -2520,6 +2535,8 @@ def _convert_chapters(file_stream, source_filename, input_file_name,
         _clear_job(job_id)
         return _err(str(e))
 
+    _job_context.job_id = job_id  # allow lazy loaders to report download progress
+
     # Synthesize each segment — write each MP3 to disk immediately so
     # completed chapters survive even if a later chapter fails or the
     # process crashes.  For save_to_output mode the files go straight
@@ -2762,6 +2779,7 @@ def convert():
 
     # --- Synthesize ---
     _report_progress(job_id, 0, 1, phase="synthesizing")
+    _job_context.job_id = job_id  # allow lazy loaders to report download progress
     on_prog = _make_on_progress(job_id)
     try:
         result = _do_synthesis(text, backend, synth_params, on_prog)

@@ -125,6 +125,9 @@ else
   uv sync "${SYNC_ARGS[@]}"
 fi
 
+echo "==> Installing pip into venv (required by some HuggingFace libraries)"
+uv pip install pip
+
 if [[ ! -f .env ]]; then
   echo "==> Creating .env from .env.example"
   cp .env.example .env
