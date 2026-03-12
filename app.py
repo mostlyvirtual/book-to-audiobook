@@ -109,9 +109,25 @@ _jobs: dict[str, dict] = {}  # job_id -> progress + control state
 _jobs_lock = threading.Lock()
 _job_context = threading.local()  # per-request job_id for lazy loaders
 
+_HF_KOKORO_REPO = "hexgrad/Kokoro-82M"
+
 
 class JobCancelledError(Exception):
     """Raised inside a synthesis loop when the user cancels the job."""
+
+
+def _make_job_control_callback(job_id: str | None):
+    """Return a callback that only enforces pause/cancel for a running job."""
+    def _job_control() -> None:
+        if _check_cancelled(job_id):
+            raise JobCancelledError(f"Job {job_id} cancelled")
+        _wait_if_paused(job_id)
+
+    def _cb(current: int, total: int) -> None:
+        _job_control()
+
+    _cb._job_control = _job_control
+    return _cb
 
 
 def _make_on_progress(job_id: str | None, phase: str = "synthesizing"):
@@ -120,12 +136,21 @@ def _make_on_progress(job_id: str | None, phase: str = "synthesizing"):
     - blocks until resumed if the job is paused
     - reports progress to the jobs tracker
     """
+    control_cb = _make_job_control_callback(job_id)
+
     def _cb(current: int, total: int) -> None:
-        if _check_cancelled(job_id):
-            raise JobCancelledError(f"Job {job_id} cancelled")
-        _wait_if_paused(job_id)
+        control_cb._job_control()
         _report_progress(job_id, current, total, phase=phase)
+
+    _cb._job_control = control_cb._job_control
     return _cb
+
+
+def _run_job_control_hook(on_progress) -> None:
+    """Check pause/cancel state without forcing a progress update."""
+    hook = getattr(on_progress, "_job_control", None)
+    if hook is not None:
+        hook()
 
 
 def _report_downloading(label: str) -> None:
@@ -133,6 +158,34 @@ def _report_downloading(label: str) -> None:
     job_id = getattr(_job_context, 'job_id', None)
     _report_progress(job_id, 0, 0, phase="downloading")
     log.info("Downloading model: %s (this only happens once)", label)
+
+
+def _hf_cache_root() -> Path:
+    """Return the Hugging Face cache root used by this process."""
+    return Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+
+
+def _hf_repo_dir(repo_id: str) -> Path:
+    """Return the cache directory for a Hugging Face repo."""
+    return _hf_cache_root() / "hub" / f"models--{repo_id.replace('/', '--')}"
+
+
+def _has_hf_model(repo_id: str) -> bool:
+    """Return True when the repo has model weights cached locally."""
+    model_dir = _hf_repo_dir(repo_id)
+    if not model_dir.is_dir():
+        return False
+    return (
+        any(model_dir.rglob("*.bin"))
+        or any(model_dir.rglob("*.safetensors"))
+        or any(model_dir.rglob("*.onnx"))
+        or any(model_dir.rglob("*.pth"))
+    )
+
+
+def _has_kokoro_voice(voice: str) -> bool:
+    """Return True when the requested Kokoro voice file is cached locally."""
+    return any(_hf_repo_dir(_HF_KOKORO_REPO).rglob(f"voices/{voice}.pt"))
 
 
 def _auto_install_extra(package: str, extra: str) -> None:
@@ -377,7 +430,10 @@ def _get_hf_pipeline(model_name: str):
     if model_name not in _hf_pipelines:
         _auto_install_extra("transformers", "huggingface")
         from transformers import pipeline as hf_pipeline
-        _report_downloading(f"HuggingFace TTS: {model_name}")
+        if not _has_hf_model(model_name):
+            _report_downloading(f"HuggingFace TTS: {model_name}")
+        else:
+            log.info("Loading HF TTS model from cache: %s", model_name)
         log.info("Loading HF TTS model: %s", model_name)
         _hf_pipelines[model_name] = hf_pipeline("text-to-speech", model=model_name)
     return _hf_pipelines[model_name]
@@ -395,9 +451,12 @@ def _get_kokoro_pipeline(lang_code: str):
     if lang_code not in _kokoro_pipelines:
         _auto_install_extra("kokoro", "kokoro")
         from kokoro import KPipeline
-        _report_downloading(f"Kokoro (lang={lang_code})")
+        if not _has_hf_model(_HF_KOKORO_REPO):
+            _report_downloading(f"Kokoro (lang={lang_code})")
+        else:
+            log.info("Loading Kokoro TTS pipeline from cache for lang=%s", lang_code)
         log.info("Loading Kokoro TTS pipeline for lang=%s", lang_code)
-        _kokoro_pipelines[lang_code] = KPipeline(lang_code=lang_code)
+        _kokoro_pipelines[lang_code] = KPipeline(lang_code=lang_code, repo_id=_HF_KOKORO_REPO)
     return _kokoro_pipelines[lang_code]
 
 
@@ -1115,6 +1174,7 @@ def synthesize_polly(text: str, voice_id: str, engine: str, on_progress=None) ->
     combined = AudioSegment.empty()
     total_chars_billed = 0
     for i, chunk in enumerate(chunks):
+        _run_job_control_hook(on_progress)
         ssml = _to_ssml(chunk)
         resp = polly.synthesize_speech(
             Text=ssml,
@@ -1189,6 +1249,7 @@ def synthesize_piper(
             wf.setframerate(sample_rate)
 
             for i, audio_chunk in enumerate(voice.synthesize(text, syn_config)):
+                _run_job_control_hook(on_progress)
                 if i > 0 and ss > 0:
                     wf.writeframes(silence_bytes)
                 wf.writeframes(audio_chunk.audio_int16_bytes)
@@ -1310,6 +1371,7 @@ def synthesize_huggingface(text: str, model_name: str, on_progress=None) -> io.B
     paragraph_silence = AudioSegment.silent(duration=400)
 
     for i, chunk in enumerate(chunks):
+        _run_job_control_hook(on_progress)
         result = pipe(chunk)
         audio_array = np.array(result["audio"]).flatten()
         sampling_rate = result["sampling_rate"]
@@ -1363,17 +1425,24 @@ def synthesize_kokoro(text: str, voice: str, speed: float, lang_code: str, on_pr
     
     # 400ms silence between chunks
     silence = AudioSegment.silent(duration=400)
-    
+
     for i, chunk in enumerate(chunks):
         try:
+            _run_job_control_hook(on_progress)
             # Kokoro loads voice .pt files from HuggingFace on first use.
-            # Temporarily allow network access even when HF_HUB_OFFLINE=1 so
-            # voice packs can be downloaded and cached the first time.
-            _prev_offline = os.environ.pop("HF_HUB_OFFLINE", None)
+            # Only allow network access when the requested voice is not
+            # already cached locally.
+            _prev_offline = None
+            if not _has_kokoro_voice(voice):
+                _report_downloading(f"Kokoro voice: {voice}")
+                # Temporarily allow network access even when HF_HUB_OFFLINE=1
+                # so voice packs can be downloaded and cached the first time.
+                _prev_offline = os.environ.pop("HF_HUB_OFFLINE", None)
             try:
                 # KPipeline.__call__ is a generator yielding Result objects
                 chunk_samples = []
                 for result in pipe(chunk, voice=voice, speed=speed):
+                    _run_job_control_hook(on_progress)
                     if result.audio is not None:
                         chunk_samples.append(result.audio.cpu().numpy())
             finally:
@@ -1412,7 +1481,9 @@ def synthesize_kokoro(text: str, voice: str, speed: float, lang_code: str, on_pr
             log.info("  Kokoro chunk %d/%d done (%d chars)", i + 1, len(chunks), len(chunk))
             if on_progress:
                 on_progress(i + 1, len(chunks))
-        except Exception as e:
+        except JobCancelledError:
+            raise
+        except Exception:
             log.exception("Kokoro chunk synthesis failed")
             raise
     
@@ -1498,6 +1569,7 @@ def synthesize_supertonic(
 
     for i, chunk in enumerate(chunks):
         try:
+            _run_job_control_hook(on_progress)
             # Supertonic returns (audio, metadata); sample rate is on engine.
             synth_out = tts.synthesize(
                 chunk, voice_style=voice_style, lang=lang,
@@ -1543,7 +1615,9 @@ def synthesize_supertonic(
             log.info("  Supertonic chunk %d/%d done (%d chars)", i + 1, len(chunks), len(chunk))
             if on_progress:
                 on_progress(i + 1, len(chunks))
-        except Exception as e:
+        except JobCancelledError:
+            raise
+        except Exception:
             log.exception("Supertonic chunk synthesis failed")
             raise
     
@@ -1648,6 +1722,7 @@ def synthesize_xtts(
     silence = AudioSegment.silent(duration=400)
 
     for i, chunk in enumerate(chunks):
+        _run_job_control_hook(on_progress)
         out = model.inference(
             text=chunk,
             language=language,
@@ -1707,6 +1782,7 @@ def synthesize_xtts_ro(
     silence = AudioSegment.silent(duration=400)
 
     for i, chunk in enumerate(chunks):
+        _run_job_control_hook(on_progress)
         out = model.inference(
             text=chunk,
             language="ro",
@@ -1807,6 +1883,7 @@ def synthesize_speecht5(text: str, speaker_id: str = "clb", on_progress=None) ->
     silence = AudioSegment.silent(duration=400)
 
     for i, chunk in enumerate(chunks):
+        _run_job_control_hook(on_progress)
         inputs = processor(text=chunk, return_tensors="pt")
         with torch.no_grad():
             speech = model.generate_speech(inputs["input_ids"], embedding, vocoder=vocoder)
@@ -1856,8 +1933,10 @@ def synthesize_hf_cloud(text: str, model_name: str, hf_token: str, on_progress=N
     silence = AudioSegment.silent(duration=400)
 
     for i, chunk in enumerate(chunks):
+        _run_job_control_hook(on_progress)
         resp = None
         for attempt in range(4):
+            _run_job_control_hook(on_progress)
             resp = http_requests.post(
                 api_url,
                 headers=headers,
@@ -2046,23 +2125,11 @@ def _probe_polly_status() -> dict:
 @app.route("/api/backend-status")
 def api_backend_status():
     """Return model readiness for each backend."""
-    cache = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
     st_cache = Path(os.environ.get("SUPERTONIC_CACHE_DIR", Path.home() / ".cache" / "supertonic2"))
     models_dir = Path(__file__).parent / "models"
 
-    def _has_hf_model(repo_id: str) -> bool:
-        model_dir = cache / "hub" / f"models--{repo_id.replace('/', '--')}"
-        if not model_dir.is_dir():
-            return False
-        return (
-            any(model_dir.rglob("*.bin"))
-            or any(model_dir.rglob("*.safetensors"))
-            or any(model_dir.rglob("*.onnx"))
-            or any(model_dir.rglob("*.pth"))
-        )
-
     piper_ready = any(models_dir.glob("*.onnx")) if models_dir.is_dir() else False
-    kokoro_ready = _has_hf_model("hexgrad/Kokoro-82M")
+    kokoro_ready = _has_hf_model(_HF_KOKORO_REPO)
     supertonic_ready = st_cache.is_dir() and any(st_cache.rglob("*.onnx"))
     hf_ready = _has_hf_model("facebook/mms-tts-eng")
     xtts_ready = _has_hf_model("coqui/XTTS-v2")
@@ -2698,6 +2765,7 @@ def _convert_chapters(file_stream, source_filename, input_file_name,
         return _err(str(e))
 
     _job_context.job_id = job_id  # allow lazy loaders to report download progress
+    chapter_control = _make_job_control_callback(job_id)
 
     # Synthesize each segment — write each MP3 to disk immediately so
     # completed chapters survive even if a later chapter fails or the
@@ -2741,7 +2809,10 @@ def _convert_chapters(file_stream, source_filename, input_file_name,
 
             try:
                 result = _do_synthesis(text, backend, synth_params,
-                                       on_progress=None)
+                                       on_progress=chapter_control)
+            except JobCancelledError:
+                log.info("Chapter conversion cancelled during segment %d", seg_idx)
+                break
             except ImportError as _imp_err:
                 log.warning("ImportError synthesizing '%s' chapter (backend=%s): %s", title, backend, _imp_err)
                 _clear_job(job_id)

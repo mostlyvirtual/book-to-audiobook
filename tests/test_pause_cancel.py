@@ -6,6 +6,7 @@ import time
 import zipfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -70,6 +71,27 @@ def _make_epub_bytes(chapters):
         )
     buf.seek(0)
     return buf.read()
+
+
+class _FakeAudioSegment:
+    def __iadd__(self, other):
+        return self
+
+    def export(self, buf, format="mp3", bitrate="128k"):
+        buf.write(b"ID3" + b"\x00" * 32)
+        return buf
+
+    @staticmethod
+    def empty():
+        return _FakeAudioSegment()
+
+    @staticmethod
+    def silent(duration=0):
+        return _FakeAudioSegment()
+
+    @staticmethod
+    def from_wav(_buf):
+        return _FakeAudioSegment()
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +160,56 @@ class TestJobControlFunctions:
         app_module._wait_if_paused("test-job-1")
         elapsed = time.monotonic() - start
         assert elapsed < 2.0
+
+    def test_make_on_progress_exposes_control_hook(self):
+        job_id = "test-job-hook"
+        app_module._report_progress(job_id, 0, 1, phase="synthesizing")
+        try:
+            on_progress = app_module._make_on_progress(job_id)
+            assert callable(getattr(on_progress, "_job_control", None))
+        finally:
+            app_module._clear_job(job_id)
+
+
+class TestSynthesisCancellationHooks:
+    def test_kokoro_checks_cancel_during_generator_iteration(self, monkeypatch, caplog):
+        class DummyAudio:
+            def cpu(self):
+                return self
+
+            def numpy(self):
+                return np.array([0.1, -0.1], dtype=np.float32)
+
+        class DummyResult:
+            def __init__(self):
+                self.audio = DummyAudio()
+
+        job_id = "kokoro-midchunk-cancel"
+        app_module._report_progress(job_id, 0, 1, phase="synthesizing")
+        on_progress = app_module._make_on_progress(job_id)
+
+        def fake_pipeline(_chunk, voice, speed):
+            yield DummyResult()
+            app_module._request_cancel(job_id)
+            yield DummyResult()
+
+        monkeypatch.setattr(app_module, "_get_kokoro_pipeline", lambda lang: fake_pipeline)
+        monkeypatch.setattr(app_module, "chunk_text", lambda text, size: ["chunk-1"])
+        monkeypatch.setattr(app_module, "AudioSegment", _FakeAudioSegment)
+
+        try:
+            caplog.clear()
+            with pytest.raises(app_module.JobCancelledError):
+                app_module.synthesize_kokoro(
+                    "hello world",
+                    "am_michael",
+                    1.0,
+                    "a",
+                    on_progress=on_progress,
+                )
+            assert "Kokoro chunk synthesis failed" not in caplog.text
+        finally:
+            app_module._clear_job(job_id)
 
 
 # ---------------------------------------------------------------------------
@@ -293,3 +365,39 @@ class TestConvertChaptersCancel:
         assert synthesis_count[0] < 3, (
             f"Expected partial synthesis, but all {synthesis_count[0]} chapters were synthesized"
         )
+
+    def test_chapter_mode_passes_control_callback_into_synthesis(self, monkeypatch):
+        seen = {}
+
+        def fake_synthesis(text, backend, params, on_progress=None):
+            seen["has_progress"] = on_progress is not None
+            seen["has_hook"] = callable(getattr(on_progress, "_job_control", None))
+            on_progress._job_control()
+            buf = io.BytesIO(b"ID3" + b"\x00" * 128)
+            buf.seek(0)
+            return {"mp3_buf": buf, "provider_detail": "test", "prosody_info": {}}
+
+        monkeypatch.setattr(app_module, "_do_synthesis", fake_synthesis)
+
+        epub_bytes = _make_epub_bytes([
+            ("Chapter 1", "First chapter body text."),
+        ])
+
+        job_id = "chapter-control-hook"
+        app_module._report_progress(job_id, 0, 1, phase="extracting")
+
+        app_module.app.config["TESTING"] = True
+        with app_module.app.test_client() as c:
+            resp = c.post(
+                "/convert",
+                data={
+                    "backend": "kokoro",
+                    "chapter_mode": "1",
+                    "job_id": job_id,
+                    "pdf": (io.BytesIO(epub_bytes), "test.epub"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        assert resp.status_code == 200
+        assert seen == {"has_progress": True, "has_hook": True}
